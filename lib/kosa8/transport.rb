@@ -105,6 +105,17 @@ module Kosa8
     end
   end
 
+  # Carries an exception raised by a caller's callback past raw's network
+  # rescue; raw re-raises the original.
+  class CallbackFailure < Exception # rubocop:disable Lint/InheritException
+    attr_reader :cause_error
+
+    def initialize(err)
+      super(err.message)
+      @cause_error = err
+    end
+  end
+
   # Sends requests to the daemon; the client builds on it.
   class Transport
     attr_reader :endpoint
@@ -121,7 +132,7 @@ module Kosa8
     end
 
     # One request; yields the Net::HTTPResponse (body unread) and returns the block's value.
-    def raw(method, path, query: nil, body: nil, raw_body: nil, approval: nil, timeout: nil)
+    def raw(method, path, query: nil, body: nil, raw_body: nil, approval: nil, timeout: nil, stream: false)
       full = (@endpoint.kind == :tcp ? @endpoint.base_path.to_s : "") + path
       q = (query || {}).each_with_object([]) do |(k, v), a|
         next if v.nil? || v == false
@@ -153,9 +164,15 @@ module Kosa8
       if t
         http.open_timeout = [t, 30].min
         http.read_timeout = t
+      elsif stream
+        # A run, exec or attach can be silent for as long as the command
+        # likes; Net::HTTP's 60 s default would cut it off. Wait for it.
+        http.read_timeout = nil
       end
       begin
         http.start { |h| h.request(req) { |resp| return yield(resp) } }
+      rescue CallbackFailure => e
+        raise e.cause_error
       rescue Net::ReadTimeout, Net::OpenTimeout => e
         raise TimeoutError.new("#{method} #{path} timed out talking to #{@endpoint.target}: #{e.message}",
                                method: method, path: path)
@@ -179,21 +196,38 @@ module Kosa8
 
     # A request whose answer is NDJSON frames; yields each, data decoded from base64.
     def frames(method, path, **kw)
-      raw(method, path, **kw) do |resp|
+      raw(method, path, stream: true, **kw) do |resp|
         if resp.code.to_i >= 400
           raise Kosa8.error_from_response(resp.code.to_i, decode(resp.read_body.to_s), method: method, path: path)
         end
 
         buf = +""
+        emit = lambda do |line|
+          next if line.empty?
+
+          frame = begin
+            Kosa8.decode_frame(JSON.parse(line))
+          rescue JSON::ParserError, ArgumentError => e
+            raise ProtocolError.new("#{method} #{path}: the daemon sent a frame that is not valid NDJSON " \
+                                    "(#{e.message}): #{line[0, 200].inspect}", method: method, path: path)
+          end
+          # Errors from the caller's own callbacks must come out as they are,
+          # not relabelled as a lost connection by the rescue in raw.
+          begin
+            yield frame
+          rescue Kosa8::Error
+            raise
+          rescue StandardError => e
+            raise CallbackFailure.new(e)
+          end
+        end
         resp.read_body do |chunk|
           buf << chunk
           while (i = buf.index("\n"))
-            line = buf.slice!(0..i).strip
-            yield Kosa8.decode_frame(JSON.parse(line)) unless line.empty?
+            emit.call(buf.slice!(0..i).strip)
           end
         end
-        line = buf.strip
-        yield Kosa8.decode_frame(JSON.parse(line)) unless line.empty?
+        emit.call(buf.strip)
         nil
       end
     end

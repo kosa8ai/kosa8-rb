@@ -41,6 +41,8 @@ Daemon: `health`, `version`, `pull`.
 Sandboxes: `list_sandboxes`, `get_sandbox`, `create_sandbox`, `start_sandbox`, `stop_sandbox`, `delete_sandbox`,
 `pull_into_sandbox`, `sandbox_images`, `sandbox_containers`, `sandbox_egress`.
 Processes: `run`, `start_container`, `exec`, `exec_frames`, `start_interactive`, `write_stdin`, `attach`.
+
+Streaming calls (`run`, `exec`, `exec_frames`, `attach`) wait as long as the command runs unless you pass `timeout:`; a timeout stops the client waiting, not the command. `write_stdin` sends the container's whole stdin in one call (the daemon closes stdin at the end of the body), so pass an IO or an Enumerable to stream input; a second call raises.
 Snapshots: `snapshot`, `list_snapshots`, `restore_snapshot`, `delete_snapshot`, `fork`, `explore`.
 Checkpoints: `checkpoint`, `list_checkpoints`, `rewind` (store: `~/.kosa8/checkpoints.json`, flock-shared with the CLI).
 `client.sandbox(id)` binds them to one sandbox.

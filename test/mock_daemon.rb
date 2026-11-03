@@ -81,7 +81,7 @@ class MockDaemon
       c.write("HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
       out[1].each do |f|
         sleep(f.delete("_sleep")) if f["_sleep"]
-        l = JSON.generate(f) + "\n"
+        l = f.is_a?(String) ? f : JSON.generate(f) + "\n"
         c.write("#{l.bytesize.to_s(16)}\r\n#{l}\r\n")
         c.flush
       end

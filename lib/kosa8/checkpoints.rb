@@ -42,10 +42,12 @@ module Kosa8
   # atomically), locked with the same flock on checkpoints.json.lock, so
   # `kosa8 rewind` sees checkpoints taken here and the other way round.
   class FileCheckpointStore
-    attr_reader :path
+    attr_reader :path, :lock_timeout
 
-    def initialize(path = nil)
+    # lock_timeout: seconds to wait for checkpoints.json.lock (10, as @kosa8/sdk).
+    def initialize(path = nil, lock_timeout: 10)
       @path = path || File.join(Dir.home, ".kosa8", "checkpoints.json")
+      @lock_timeout = lock_timeout
       @mu = Mutex.new
     end
 
@@ -60,7 +62,7 @@ module Kosa8
       @mu.synchronize do
         FileUtils.mkdir_p(File.dirname(@path), mode: 0o700)
         File.open("#{@path}.lock", File::RDWR | File::CREAT, 0o600) do |lock|
-          lock.flock(File::LOCK_EX)
+          acquire(lock)
           d = load
           r = yield d
           tmp = "#{@path}.tmp"
@@ -69,6 +71,19 @@ module Kosa8
           File.rename(tmp, @path)
           r
         end
+      end
+    end
+
+    private
+
+    def acquire(lock)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @lock_timeout
+      until lock.flock(File::LOCK_EX | File::LOCK_NB)
+        if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+          raise CheckpointError, "timed out after #{@lock_timeout}s waiting for #{@path}.lock; another kosa8 " \
+                                 "process is holding it"
+        end
+        sleep 0.05
       end
     end
   end

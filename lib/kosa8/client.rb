@@ -28,6 +28,8 @@ module Kosa8
       @transport = Transport.new(socket_path: socket_path, host: host, token: token, insecure: insecure, actor: actor,
                                  agent_token: agent_token, headers: headers, timeout: timeout, env: env)
       @checkpoints = CheckpointBook.new(checkpoint_store || FileCheckpointStore.new)
+      @stdin_sent = {}
+      @stdin_mu = Mutex.new
     end
 
     # --- daemon ---------------------------------------------------------------
@@ -163,7 +165,22 @@ module Kosa8
     end
 
     # POST …/containers/{cid}/stdin: a String, an IO, or an Enumerable of chunks (sent chunked).
+    #
+    # The request body is the container's whole stdin: the daemon closes stdin
+    # when the body ends, so this can be called once per container. To feed
+    # input over time, pass an IO or an Enumerable that yields as it goes.
+    # A second call raises instead of reporting success for input the process
+    # would never see.
     def write_stdin(sandbox, container, data, approval: nil)
+      key = [sandbox.to_s, container.to_s]
+      @stdin_mu.synchronize do
+        if @stdin_sent[key]
+          raise Error, "stdin of container #{container} in #{sandbox} was already sent and is closed: the daemon " \
+                       "treats one write_stdin body as the whole of stdin. Pass an IO or an Enumerable to stream input"
+        end
+
+        @stdin_sent[key] = true
+      end
       @transport.json("POST", sb(sandbox, "containers", Kosa8.enc(container), "stdin"), raw_body: data, approval: approval)
     end
 
@@ -265,8 +282,20 @@ module Kosa8
     # Save a restore point: a snapshot <sandbox>-ckpt-<n> on the sandbox's stack,
     # the same store `kosa8 checkpoint` uses; the oldest is evicted past 10.
     def checkpoint(sandbox, label: "", approval: nil)
-      cid, evict = @checkpoints.next_id(sandbox)
-      snap = snapshot(sandbox, id: cid, approval: approval)
+      cid = evict = snap = nil
+      # Two checkpoints taken at once (here or by the CLI) can pick the same
+      # next id; the loser's snapshot is refused with 409. Pick again.
+      5.times do |attempt|
+        cid, evict = @checkpoints.next_id(sandbox)
+        begin
+          snap = snapshot(sandbox, id: cid, approval: approval)
+          break
+        rescue ConflictError
+          raise if attempt == 4 || list_snapshots.none? { |x| x["id"] == cid }
+
+          sleep 0.1 * (attempt + 1)
+        end
+      end
       evict.each do |old| # evict only once the replacement exists
         delete_snapshot(old, approval: approval)
       rescue Error
@@ -292,7 +321,8 @@ module Kosa8
       begin
         restored = restore_snapshot(target["id"], name: sandbox, approval: approval)
       rescue Error => e
-        raise CheckpointError, "restore failed and #{sandbox} is now stopped: #{e.message} — recover with " \
+        raise CheckpointError, "restore failed and #{sandbox} no longer exists (it was deleted to free its name " \
+                               "for the restore): #{e.message} — the checkpoint is intact; recover with " \
                                "restore_snapshot(#{target['id'].inspect}, name: #{sandbox.inspect})"
       end
       dropped = []
@@ -397,7 +427,7 @@ module Kosa8
         rescue Error => e
           b.error = e.message
           b.output = (e.stdout + e.stderr).chomp if e.is_a?(StreamError)
-          break if e.is_a?(TimeoutError) || b.error !~ TRANSIENT
+          break if e.is_a?(TimeoutError) || b.error !~ TRANSIENT || attempt == 3
 
           sleep((attempt + 1) * 0.5)
         end
@@ -462,6 +492,22 @@ module Kosa8
 
     def explore(variants, **kw)
       @client.explore(@id, variants, **kw)
+    end
+
+    def exec_frames(container, args, **kw, &blk)
+      @client.exec_frames(@id, container, args, **kw, &blk)
+    end
+
+    def start_interactive(image, args = [], **kw)
+      @client.start_interactive(@id, image, args, **kw)
+    end
+
+    def write_stdin(container, data, **kw)
+      @client.write_stdin(@id, container, data, **kw)
+    end
+
+    def attach(container, **kw)
+      @client.attach(@id, container, **kw)
     end
 
     { start: :start_sandbox, stop: :stop_sandbox, delete: :delete_sandbox, snapshot: :snapshot,

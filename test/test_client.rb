@@ -229,4 +229,39 @@ class ClientTest < Minitest::Test
   ensure
     srv&.close
   end
+
+  def test_error_keeps_object_method
+    @d.on("GET", "/kosa8/v1/sandboxes") { J.call(500, "error" => "boom") }
+    e = assert_raises(Kosa8::ApiError) { @k.list_sandboxes }
+    assert_equal "GET", e.http_method
+    assert_kind_of Method, e.method(:message), "Object#method must not be shadowed"
+  end
+
+  def test_second_write_stdin_raises
+    @d.on("POST", "/kosa8/v1/sandboxes/s/containers/c/stdin") { J.call(200, "ok" => true) }
+    assert_equal({ "ok" => true }, @k.write_stdin("s", "c", "hi\n"))
+    assert_raises(Kosa8::Error) { @k.write_stdin("s", "c", "again\n") }
+  end
+
+  def test_callback_error_is_not_relabelled
+    @d.on("POST", "/kosa8/v1/sandboxes/s/run") { MockDaemon.frames(F.call("stdout", "x"), { "done" => true, "exit" => 0 }) }
+    assert_raises(IOError) { @k.run("s", "alpine", ["true"], on_stdout: ->(_) { raise IOError, "mine" }) }
+  end
+
+  def test_bad_frame_is_protocol_error
+    @d.on("POST", "/kosa8/v1/sandboxes/s/run") { MockDaemon.frames("not json\n") }
+    assert_raises(Kosa8::ProtocolError) { @k.run("s", "alpine", ["true"]) }
+  end
+
+  def test_checkpoint_retries_on_id_collision
+    calls = 0
+    @d.on("POST", "/kosa8/v1/sandboxes/s/snapshot") do
+      calls += 1
+      calls == 1 ? J.call(409, "error" => "snapshot exists") : J.call(201, "id" => JSON.parse(@d.last.body)["id"])
+    end
+    @d.on("GET", "/kosa8/v1/snapshots") { J.call(200, [{ "id" => "s-ckpt-1" }]) }
+    r = @k.checkpoint("s", label: "a")
+    assert_equal 2, calls
+    assert_equal "s-ckpt-1", r["checkpoint"]["id"]
+  end
 end

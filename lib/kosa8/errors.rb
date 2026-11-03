@@ -4,14 +4,14 @@ module Kosa8
   # Every error this gem raises. The daemon's own words are kept in
   # +daemon_message+ and +remediation+, as @kosa8/sdk does.
   class Error < StandardError
-    attr_reader :status, :daemon_message, :remediation, :method, :path, :body
+    attr_reader :status, :daemon_message, :remediation, :http_method, :path, :body
 
     def initialize(message = nil, status: nil, daemon_message: nil, remediation: nil, method: nil, path: nil, body: nil)
       super(message)
       @status = status
       @daemon_message = daemon_message
       @remediation = remediation
-      @method = method
+      @http_method = method
       @path = path
       @body = body
     end
@@ -49,6 +49,9 @@ module Kosa8
 
   class CheckpointError < Error; end
   class TimeoutError < Error; end
+
+  # Raised when a frame stream carries something that is not NDJSON.
+  class ProtocolError < Error; end
 
   BY_STATUS = {
     400 => BadRequestError, 401 => AuthError, 403 => PolicyError,
