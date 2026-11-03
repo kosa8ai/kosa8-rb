@@ -225,7 +225,10 @@ module Kosa8
         raise TimeoutError.new("#{method} #{path} timed out talking to #{@endpoint.target}: #{e.message}",
                                method: method, path: path)
       rescue SystemCallError, IOError, SocketError, OpenSSL::SSL::SSLError => e
-        hint = e.is_a?(Errno::ENOENT) || e.is_a?(Errno::ECONNREFUSED) ? " (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)" : ""
+        # Windows reports a missing unix socket path as ENETDOWN.
+        absent = e.is_a?(Errno::ENOENT) || e.is_a?(Errno::ECONNREFUSED) ||
+                 (Kosa8.windows? && @endpoint.kind == :unix && e.is_a?(Errno::ENETDOWN))
+        hint = absent ? " (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)" : ""
         if @endpoint.kind == :unix && @endpoint.default_socket && Kosa8.windows?
           hint += "; on Windows the engine runs in WSL2: run `kosa8 wsl setup`, or set KOSA8_HOST"
         end
