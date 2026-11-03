@@ -12,12 +12,13 @@ class ClientTest < Minitest::Test
   F = MockDaemon.method(:frame)
 
   def setup
+    MockDaemon.require!(self)
     @d = MockDaemon.new
     @k = Kosa8::Client.new(socket_path: @d.socket_path, checkpoint_store: Kosa8::MemoryCheckpointStore.new, env: {})
   end
 
   def teardown
-    @d.close
+    @d&.close
   end
 
   def test_health_and_headers
@@ -188,46 +189,12 @@ class ClientTest < Minitest::Test
     d = JSON.parse(File.read(path))
     assert_equal 8, d["other"].length
     assert_equal "cli", d["sb"][0]["label"]
-    assert_equal 0o600, File.stat(path).mode & 0o777
+    assert_equal 0o600, File.stat(path).mode & 0o777 unless Kosa8.windows?
     assert File.exist?("#{path}.lock")
     refute_includes File.read(path), '"auto"'
     assert_match(/\.\d{9}Z\z/, d["other"][0]["created"])
   ensure
     FileUtils.rm_rf(dir)
-  end
-
-  def test_resolve_endpoint
-    r = ->(host, env) { Kosa8.resolve_endpoint(host: host, socket_path: "/s.sock", env: env) }
-    assert_equal "unix:///s.sock", r.call(nil, {}).target
-    e = r.call(nil, "KOSA8_HOST" => "https://w.example.com/", "KOSA8_TOKEN" => "t")
-    assert_equal ["https://w.example.com:443", "t"], [e.target, e.token]
-    assert_equal "http://127.0.0.1:7070", r.call("tcp://127.0.0.1:7070", {}).target
-    assert_equal "http://localhost:7070", r.call("localhost:7070", {}).target
-    assert_equal "unix:///o.sock", r.call("unix:///o.sock", {}).target
-    assert_raises(Kosa8::Error) { r.call("http://10.0.0.5:7070", {}) }
-    assert_equal "http://10.0.0.5:7070", r.call(nil, "KOSA8_HOST" => "http://10.0.0.5:7070", "KOSA8_INSECURE" => "1").target
-    assert_raises(Kosa8::Error) { r.call("ftp://x", {}) }
-    assert_nil r.call("https://w.example.com", "KOSA8_TOKEN" => "t").token, "env token only for an env host"
-  end
-
-  def test_remote_bearer
-    srv = TCPServer.new("127.0.0.1", 0)
-    auth = nil
-    t = Thread.new do
-      c = srv.accept
-      while (h = c.gets) && h != "\r\n"
-        auth = h.split(":", 2)[1].strip if h.downcase.start_with?("authorization:")
-      end
-      c.write("HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"version\":\"x\"}")
-      c.close
-    end
-    k = Kosa8::Client.new(host: "http://127.0.0.1:#{srv.addr[1]}", token: "tok", env: {},
-                          checkpoint_store: Kosa8::MemoryCheckpointStore.new)
-    assert_equal "x", k.version
-    t.join
-    assert_equal "Bearer tok", auth
-  ensure
-    srv&.close
   end
 
   def test_error_keeps_object_method
@@ -264,5 +231,155 @@ class ClientTest < Minitest::Test
     assert_equal "s-ckpt-2", r["checkpoint"]["id"]
     @d.on("POST", "/kosa8/v1/sandboxes/t/snapshot") { J.call(409, "error" => "sandbox busy") }
     assert_raises(Kosa8::ConflictError) { @k.checkpoint("t") }
+  end
+end
+
+# Endpoint resolution and remote workers: no unix socket needed.
+class EndpointTest < Minitest::Test
+  def setup
+    @dir = Dir.mktmpdir("k8rb-w")
+    @wf = File.join(@dir, "worker.json")
+  end
+
+  def teardown
+    FileUtils.rm_rf(@dir)
+  end
+
+  def save(obj)
+    File.write(@wf, obj.is_a?(String) ? obj : JSON.generate(obj))
+  end
+
+  def resolve(**kw)
+    Kosa8.resolve_endpoint(worker_file: @wf, env: {}, **kw)
+  end
+
+  def test_resolve_endpoint
+    r = ->(host, env) { Kosa8.resolve_endpoint(host: host, socket_path: "/s.sock", env: env, worker_file: false) }
+    assert_equal "unix:///s.sock", r.call(nil, {}).target
+    e = r.call(nil, "KOSA8_HOST" => "https://w.example.com/", "KOSA8_TOKEN" => "t")
+    assert_equal ["https://w.example.com:443", "t"], [e.target, e.token]
+    assert_equal "http://127.0.0.1:7070", r.call("tcp://127.0.0.1:7070", {}).target
+    assert_equal "http://localhost:7070", r.call("localhost:7070", {}).target
+    assert_equal "unix:///o.sock", r.call("unix:///o.sock", {}).target
+    assert_raises(Kosa8::Error) { r.call("http://10.0.0.5:7070", {}) }
+    assert_equal "http://10.0.0.5:7070", r.call(nil, "KOSA8_HOST" => "http://10.0.0.5:7070", "KOSA8_INSECURE" => "1").target
+    assert_raises(Kosa8::Error) { r.call("ftp://x", {}) }
+    assert_nil r.call("https://w.example.com", "KOSA8_TOKEN" => "t").token, "env token only for an env host"
+  end
+
+  def test_remote_bearer
+    srv = TCPServer.new("127.0.0.1", 0)
+    auth = nil
+    t = Thread.new do
+      c = srv.accept
+      while (h = c.gets) && h != "\r\n"
+        auth = h.split(":", 2)[1].strip if h.downcase.start_with?("authorization:")
+      end
+      c.write("HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"version\":\"x\"}")
+      c.close
+    end
+    k = Kosa8::Client.new(host: "http://127.0.0.1:#{srv.addr[1]}", token: "tok", env: {},
+                          checkpoint_store: Kosa8::MemoryCheckpointStore.new)
+    assert_equal "x", k.version
+    t.join
+    assert_equal "Bearer tok", auth
+  ensure
+    srv&.close
+  end
+
+  def test_saved_worker_used_when_no_host
+    save("host" => "http://127.0.0.1:7428", "token" => "wt", "via" => "wsl", "distro" => "Ubuntu", "extra" => [1])
+    e = resolve
+    assert_equal ["http://127.0.0.1:7428", "wt"], [e.target, e.token]
+    assert_equal :tcp, e.kind
+    e = resolve(env: { "KOSA8_HOST" => "  ", "KOSA8_TOKEN" => "envt" })
+    assert_equal ["http://127.0.0.1:7428", "wt"], [e.target, e.token], "blank KOSA8_HOST is unset"
+    save("host" => "127.0.0.1:7428")
+    assert_equal ["http://127.0.0.1:7428", nil], [resolve.target, resolve.token]
+    save("host" => "unix:///x/k.sock", "token" => "wt")
+    assert_equal "unix:///x/k.sock", resolve.target
+  end
+
+  def test_env_host_wins_over_saved_token
+    save("host" => "http://127.0.0.1:7428", "token" => "wt")
+    e = resolve(env: { "KOSA8_HOST" => "https://w.example.com" })
+    assert_equal ["https://w.example.com:443", nil], [e.target, e.token]
+    e = resolve(env: { "KOSA8_HOST" => "https://w.example.com", "KOSA8_TOKEN" => "et" })
+    assert_equal "et", e.token
+    e = resolve(host: "https://h.example.com")
+    assert_equal ["https://h.example.com:443", nil], [e.target, e.token]
+  end
+
+  def test_socket_path_skips_saved_file
+    save("host" => "http://127.0.0.1:7428", "token" => "wt")
+    e = resolve(socket_path: "/s.sock")
+    assert_equal ["unix:///s.sock", false], [e.target, e.default_socket]
+  end
+
+  def test_bad_saved_file_means_socket
+    ['{"host": ', "[]", '{"host": "  "}', '{"host": 5}', '{"token": "t"}', ""].each do |text|
+      save(text)
+      e = resolve
+      assert_equal "unix://#{Kosa8.default_socket_path}", e.target, text
+      assert e.default_socket
+    end
+    assert_equal :unix, Kosa8.resolve_endpoint(worker_file: File.join(@dir, "missing.json"), env: {}).kind
+    save("host" => "http://127.0.0.1:7428")
+    assert_equal :unix, resolve(worker_file: false).kind
+    assert_equal :unix, resolve(worker_file: "").kind
+  end
+
+  def test_saved_insecure
+    save("host" => "http://192.168.1.20:7428", "token" => "wt", "insecure" => true)
+    assert_equal "http://192.168.1.20:7428", resolve.target
+    save("host" => "http://192.168.1.20:7428", "token" => "wt")
+    e = assert_raises(Kosa8::Error) { resolve }
+    assert_includes e.message, "plain http"
+    assert_equal "http://192.168.1.20:7428", resolve(insecure: true).target
+    assert_equal "http://192.168.1.20:7428", resolve(env: { "KOSA8_INSECURE" => "1" }).target
+    save("host" => "http://192.168.1.20:7428", "insecure" => "yes")
+    assert_raises(Kosa8::Error) { resolve }
+  end
+
+  def test_token_option_overrides_saved
+    save("host" => "https://w.example.com", "token" => "wt")
+    assert_equal "mine", resolve(token: "mine").token
+    assert_equal "wt", resolve(token: "").token
+  end
+
+  def test_client_uses_saved_worker
+    srv = TCPServer.new("127.0.0.1", 0)
+    save("host" => "http://127.0.0.1:#{srv.addr[1]}", "token" => "wt")
+    auth = nil
+    t = Thread.new do
+      c = srv.accept
+      while (h = c.gets) && h != "\r\n"
+        auth = h.split(":", 2)[1].strip if h.downcase.start_with?("authorization:")
+      end
+      c.write("HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"version\":\"x\"}")
+      c.close
+    end
+    k = Kosa8::Client.new(env: {}, worker_file: @wf, checkpoint_store: Kosa8::MemoryCheckpointStore.new)
+    assert_equal "http://127.0.0.1:#{srv.addr[1]}", k.transport.endpoint.target
+    assert_equal "x", k.version
+    t.join
+    assert_equal "Bearer wt", auth
+  ensure
+    srv&.close
+  end
+
+  def test_windows_hint_on_default_socket
+    k = Kosa8::Client.new(env: {}, worker_file: false, checkpoint_store: Kosa8::MemoryCheckpointStore.new)
+    ep = k.transport.endpoint
+    ep.socket_path = File.join(@dir, "nope.sock")
+    e = assert_raises(Kosa8::ConnectionError) { k.health }
+    if Kosa8.windows?
+      assert_includes e.message, "kosa8 wsl setup"
+    else
+      refute_includes e.message, "kosa8 wsl setup"
+    end
+    k2 = Kosa8::Client.new(socket_path: File.join(@dir, "nope.sock"), env: {}, checkpoint_store: Kosa8::MemoryCheckpointStore.new)
+    e = assert_raises(Kosa8::ConnectionError) { k2.health }
+    refute_includes e.message, "kosa8 wsl setup", "only for the default socket"
   end
 end

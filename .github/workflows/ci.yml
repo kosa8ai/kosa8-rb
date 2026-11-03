@@ -1,0 +1,22 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      # Unit tests only: a mock daemon on a unix socket (skipped where the
+      # platform has none), stub transports and loopback TCP. No real daemon.
+      - name: Unit tests
+        run: ruby -w -Ilib -Itest -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }'

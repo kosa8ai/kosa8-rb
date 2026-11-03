@@ -27,6 +27,20 @@ sb.delete
 | `token:` / `KOSA8_TOKEN` | sent as `Authorization: Bearer` to a remote worker |
 | `actor:` | `"tool"` (`human`, `agent`, `tool`), sent as `X-Kosa8-Actor` |
 | `agent_token:` / `KOSA8_AGENT_TOKEN` | sent as `X-Kosa8-Agent-Token` |
+| `worker_file:` | `~/.kosa8/worker.json`; `false` or `""` reads none |
+
+Where requests go, the same as the CLI:
+
+1. `host:`, or a non-blank `KOSA8_HOST`. The token is `token:`, else `KOSA8_TOKEN` (only for a
+   host from `KOSA8_HOST`). The saved file is not read.
+2. Else, unless `socket_path:` is given, the connection the CLI saved in `~/.kosa8/worker.json`
+   (`kosa8 wsl setup` on Windows, `kosa8 worker join` anywhere): its `host`, its `token` unless
+   `token:` is given, and plain http to a LAN address only with `"insecure": true`, `insecure: true`
+   or `KOSA8_INSECURE=1`. A missing or malformed file, or a blank `host`, is ignored.
+3. Else the unix socket.
+
+On Windows the engine runs in WSL2: run `kosa8 wsl setup` once and `Kosa8::Client.new` finds it.
+`client.transport.endpoint.target` shows where requests go.
 
 ## Errors
 
@@ -121,6 +135,7 @@ cloud carries its stable `code`. The address is `KOSA8_CLOUD_URL` (default
 ruby -w test/test_client.rb      # mock daemon on a unix socket
 ruby -w test/test_toolbox.rb
 ruby -w test/test_cloud.rb       # stub transport and a local socket
+ruby -w -Ilib -Itest -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }'  # all, as CI does
 ruby examples/smoke.rb           # live, against a running `kosa8 daemon`
 ```
 
