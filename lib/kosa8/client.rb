@@ -282,18 +282,20 @@ module Kosa8
     # Save a restore point: a snapshot <sandbox>-ckpt-<n> on the sandbox's stack,
     # the same store `kosa8 checkpoint` uses; the oldest is evicted past 10.
     def checkpoint(sandbox, label: "", approval: nil)
-      cid = evict = snap = nil
+      snap = nil
       # Two checkpoints taken at once (here or by the CLI) can pick the same
-      # next id; the loser's snapshot is refused with 409. Pick again.
-      5.times do |attempt|
-        cid, evict = @checkpoints.next_id(sandbox)
+      # next id; the loser's snapshot is refused with 409. The winner records
+      # its id only once its snapshot is done, so step past the taken id
+      # rather than re-reading the store.
+      cid, evict = @checkpoints.next_id(sandbox)
+      10.times do |attempt|
         begin
           snap = snapshot(sandbox, id: cid, approval: approval)
           break
-        rescue ConflictError
-          raise if attempt == 4 || list_snapshots.none? { |x| x["id"] == cid }
+        rescue ConflictError => e
+          raise if attempt == 9 || !(e.daemon_message || e.message).to_s.include?("already exists")
 
-          sleep 0.1 * (attempt + 1)
+          cid = "#{sandbox}-ckpt-#{CheckpointBook.seq(cid, sandbox) + 1}"
         end
       end
       evict.each do |old| # evict only once the replacement exists

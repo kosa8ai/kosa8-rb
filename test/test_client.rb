@@ -257,11 +257,12 @@ class ClientTest < Minitest::Test
     calls = 0
     @d.on("POST", "/kosa8/v1/sandboxes/s/snapshot") do
       calls += 1
-      calls == 1 ? J.call(409, "error" => "snapshot exists") : J.call(201, "id" => JSON.parse(@d.last.body)["id"])
+      calls == 1 ? J.call(409, "error" => "snapshot already exists: s-ckpt-1") : J.call(201, "id" => "s-ckpt-2")
     end
-    @d.on("GET", "/kosa8/v1/snapshots") { J.call(200, [{ "id" => "s-ckpt-1" }]) }
     r = @k.checkpoint("s", label: "a")
     assert_equal 2, calls
-    assert_equal "s-ckpt-1", r["checkpoint"]["id"]
+    assert_equal "s-ckpt-2", r["checkpoint"]["id"]
+    @d.on("POST", "/kosa8/v1/sandboxes/t/snapshot") { J.call(409, "error" => "sandbox busy") }
+    assert_raises(Kosa8::ConflictError) { @k.checkpoint("t") }
   end
 end

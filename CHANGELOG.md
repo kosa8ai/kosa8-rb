@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 — 2026-11-03
+
+- **Concurrent checkpoints really no longer collide.** 0.1.1 retried by re-reading the
+  store, which still returned the taken id (the winner records it only after its snapshot
+  completes). The loser now steps to the next id; a 409 for any other reason is raised.
+  Verified live with two threads checkpointing one sandbox.
+
 ## 0.1.1 — 2026-11-03
 
 Fixes found while writing and testing the docs at https://docs.kosa8.com/guides/rb-guide/.
