@@ -47,10 +47,47 @@ Snapshots: `snapshot`, `list_snapshots`, `restore_snapshot`, `delete_snapshot`, 
 Checkpoints: `checkpoint`, `list_checkpoints`, `rewind` (store: `~/.kosa8/checkpoints.json`, flock-shared with the CLI).
 `client.sandbox(id)` binds them to one sandbox.
 
+## Toolbox
+
+Run code, files, git, shell sessions, terminals, previews, lifecycle and templates, each one daemon
+route (see the [native API](https://docs.kosa8.com/guides/native-api/)). All of them except the
+template calls are also on `client.sandbox(id)`.
+
+```ruby
+k.create_sandbox(name: "work", egress_allow: ["github.com"], auto_stop_min: 30, ttl_min: 120)
+sb = k.sandbox("work")
+
+r = sb.run_code("print(6*7)")                  # Kosa8::CodeResult; also language: "javascript" / "typescript"
+r.stdout                                       # "42\n"; r.ok?, r.exit_code, r.timed_out
+r.artifacts.each { |a| File.binwrite(a.name, a.data) }  # matplotlib charts as PNG bytes
+
+sb.write_file("/workspace/app.py", "print(1)") # make_dir, move_file, delete_file(recursive: true)
+sb.read_text("/workspace/app.py")              # read_file gives binary bytes; list_files, stat_file
+
+sb.git_clone("https://github.com/octocat/Hello-World.git", "hw", depth: 1)
+sb.git_commit("hw", "change", author_name: "me", author_email: "me@example.com")  # stages everything first
+sb.git("log", path: "hw", n: 5).log            # any op: status, add, push, pull, checkout, branches, diff
+
+sb.shell("cd /tmp && export X=1")              # session "main", made on first use; cd/export persist
+sb.shell("echo $X; pwd").cwd                   # "/tmp"; create_session / session_exec / delete_session
+
+cid = sb.start_pty(cols: 80, rows: 24)         # then WebSocket …/containers/{cid}/tty; resize_pty
+sb.create_preview(8000, session: "main", expires_in_s: 600)  # signed link; k.revoke_previews ends them all
+sb.set_lifecycle(auto_stop_min: 0)             # nil keeps a setting, 0 turns it off
+
+k.build_template("py-data", "./ctx", build_args: { "V" => "1" }) { |out| print out }  # tars ./ctx, honours .dockerignore
+k.create_sandbox(name: "fast", template: "py-data")
+k.list_templates; k.delete_template("py-data")
+```
+
+A non-zero exit or a failed git op is a result (`ok?` false), not an exception; a failed template build
+raises `Kosa8::StreamError`.
+
 ## Development
 
 ```sh
 ruby -w test/test_client.rb      # mock daemon on a unix socket
+ruby -w test/test_toolbox.rb
 ruby examples/smoke.rb           # live, against a running `kosa8 daemon`
 ```
 

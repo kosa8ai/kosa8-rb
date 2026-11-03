@@ -38,6 +38,11 @@ class MockDaemon
     [:json, status, obj]
   end
 
+  # A raw answer: status, extra headers, body bytes (Content-Length defaults to the body's).
+  def self.raw(status, body, headers = {})
+    [:raw, status, headers, body]
+  end
+
   def self.frames(*frames)
     [:frames, frames]
   end
@@ -74,7 +79,11 @@ class MockDaemon
       (@routes.find { |m, p, _| m == method && (p.is_a?(Regexp) ? p.match?(path) : p == path) } || [])[2]
     end
     out = handler ? handler.call(req) : MockDaemon.json(404, "error" => "no route #{method} #{path}")
-    if out[0] == :json
+    if out[0] == :raw
+      hdrs = { "Content-Length" => out[3].bytesize.to_s }.merge(out[2])
+      c.write("HTTP/1.1 #{out[1]} X\r\n" + hdrs.map { |k, v| "#{k}: #{v}\r\n" }.join + "Connection: close\r\n\r\n")
+      c.write(out[3])
+    elsif out[0] == :json
       text = JSON.generate(out[2])
       c.write("HTTP/1.1 #{out[1]} X\r\nContent-Type: application/json\r\nContent-Length: #{text.bytesize}\r\nConnection: close\r\n\r\n#{text}")
     else
