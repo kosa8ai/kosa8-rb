@@ -32,7 +32,7 @@ sb.delete
 
 All errors inherit `Kosa8::Error` and carry the daemon's message and remediation:
 `ConnectionError`, `BadRequestError`, `AuthError`, `PolicyError` › `ApprovalRequiredError` (`#approval`),
-`NotFoundError`, `ConflictError`, `UnsupportedError`, `StreamError` (`#stdout`/`#stderr` so far),
+`NotFoundError`, `ConflictError`, `UnsupportedError`, `PaymentRequiredError` (402), `RateLimitError` (429), `StreamError` (`#stdout`/`#stderr` so far),
 `CheckpointError`, `TimeoutError`. Methods that a policy may gate take `approval:`.
 
 ## API
@@ -83,11 +83,44 @@ k.list_templates; k.delete_template("py-data")
 A non-zero exit or a failed git op is a result (`ok?` false), not an exception; a failed template build
 raises `Kosa8::StreamError`.
 
+## kosa8 Cloud
+
+The same sandboxes on kosa8 Cloud instead of the local daemon. Make an API
+key in the cloud dashboard and set `KOSA8_API_KEY`.
+
+```ruby
+require "kosa8"
+
+cloud = Kosa8::Cloud.new  # or Kosa8::Cloud.new(api_key: "k8c_live_...")
+
+box = cloud.sandboxes.create(template: "python", sleep_after_s: 600)
+r = box.exec(["python3", "-c", "print(6 * 7)"])
+puts r.exit_code, r.stdout     # 0, 42
+box.sleep                      # costs only snapshot storage while asleep
+box.exec("ls /workspace")      # wakes it, files and all
+box.delete
+
+cloud.functions.deploy("hello", {
+  "runtime" => "python3.12",
+  "code" => "def handler(event):\n    return {\"hello\": event.get(\"name\", \"world\")}\n"
+})
+out = cloud.functions.invoke("hello", { "name" => "kosa8" })
+p out["ok"], out["result"]     # true, {"hello"=>"kosa8"}
+```
+
+A new organization runs nothing until a payment method is on file; until
+then creating a sandbox raises `Kosa8::PaymentRequiredError` (`code`
+`payment_required`), whose message says what to do. Every error from the
+cloud carries its stable `code`. The address is `KOSA8_CLOUD_URL` (default
+`https://api.kosa8.cloud`, https only except localhost); `cloud.me` and
+`cloud.usage` show the org and this month's bill estimate.
+
 ## Development
 
 ```sh
 ruby -w test/test_client.rb      # mock daemon on a unix socket
 ruby -w test/test_toolbox.rb
+ruby -w test/test_cloud.rb       # stub transport and a local socket
 ruby examples/smoke.rb           # live, against a running `kosa8 daemon`
 ```
 

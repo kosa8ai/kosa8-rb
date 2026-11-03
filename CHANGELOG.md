@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+kosa8 Cloud, the same as the Python SDK's `Kosa8Cloud` and `@kosa8/sdk`'s.
+
+- `Kosa8::Cloud`: a client for the kosa8 Cloud control plane, authenticated with a `k8c_live_` API key
+  (`KOSA8_API_KEY`; address `KOSA8_CLOUD_URL`, default `https://api.kosa8.cloud`, https only except
+  localhost). Standard library only; `inspect` never shows the key; `transport:` swaps Net::HTTP out.
+- `cloud.sandboxes.create`, `list` and `get` return a `Kosa8::CloudSandbox` with `exec` (returns
+  `Kosa8::CloudExecResult`: `exit_code`, `stdout`, `stderr`, `woke_ms`), `sleep`, `wake`, `refresh` and `delete`.
+- `cloud.functions`: `deploy`, `list`, `get`, `delete`, `invoke` and `map`.
+- `cloud.me` and `cloud.usage`.
+- Errors: every error has `code`, the cloud's stable error code. New `Kosa8::PaymentRequiredError` (402)
+  and `Kosa8::RateLimitError` (429).
+
 ## 0.2.0 — 2026-11-03
 
 The sandbox toolbox, matching the Python SDK and the v0.13.0 daemon.
