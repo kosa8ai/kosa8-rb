@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-03
+
+kosa8 Cloud's API (api.kosa8.cloud) is not open yet; the `Kosa8Cloud` client is ready for when it is.
 
 kosa8 Cloud, the same as the Python SDK's `Kosa8Cloud` and `@kosa8/sdk`'s.
 
