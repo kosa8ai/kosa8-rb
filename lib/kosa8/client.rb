@@ -21,6 +21,8 @@ module Kosa8
   #   k.pull_into_sandbox("demo", "alpine:latest")
   #   puts k.run("demo", "alpine:latest", ["echo", "hi"]).stdout
   class Client
+    include Toolbox
+
     attr_reader :transport, :checkpoints
 
     def initialize(socket_path: nil, host: nil, token: nil, insecure: false, actor: "tool", agent_token: nil,
@@ -62,8 +64,14 @@ module Kosa8
 
     # POST /kosa8/v1/sandboxes: boot a microVM sandbox.
     # egress: "deny" | "any" | "fakenet" | "allow:host,host" | { allow: [...] }
+    #
+    # auto_stop_min stops it after that many idle minutes, ttl_min that long
+    # after creation, auto_delete_min deletes it once stopped that long, and
+    # ephemeral deletes it whenever it stops. template starts it with a
+    # template's image (see build_template).
     def create_sandbox(name: nil, cpus: nil, mem_mb: nil, disk_gb: nil, mounts: nil, egress: nil, egress_allow: nil,
-                       capture: nil, labels: nil, broker: nil, approval: nil)
+                       capture: nil, labels: nil, broker: nil, auto_stop_min: nil, auto_delete_min: nil, ttl_min: nil,
+                       ephemeral: false, template: nil, approval: nil)
       body = {}
       body[:name] = name if name
       body[:cpus] = cpus if cpus
@@ -75,6 +83,11 @@ module Kosa8
       body[:capture] = capture unless capture.nil?
       body[:labels] = labels if labels
       body[:broker] = broker if broker
+      { auto_stop_min: auto_stop_min, auto_delete_min: auto_delete_min, ttl_min: ttl_min }.each do |k, v|
+        body[k] = v if v && v.positive?
+      end
+      body[:ephemeral] = true if ephemeral
+      body[:template] = template if template
       @transport.json("POST", "/kosa8/v1/sandboxes", body: body, approval: approval)
     end
 
@@ -510,6 +523,18 @@ module Kosa8
 
     def attach(container, **kw)
       @client.attach(@id, container, **kw)
+    end
+
+    # The toolbox, bound to this sandbox: sandbox.run_code("print(1)"),
+    # sandbox.write_file("a.txt", "hi"), sandbox.shell("ls"), …
+    %i[run_code list_files stat_file read_file read_text write_file delete_file make_dir move_file git git_clone
+       git_status git_commit create_session list_sessions session_exec shell delete_session start_pty resize_pty
+       create_preview].each do |name|
+      define_method(name) { |*args, **kw, &blk| @client.public_send(name, @id, *args, **kw, &blk) }
+    end
+
+    def set_lifecycle(**kw)
+      @client.set_lifecycle(@id, **kw)
     end
 
     { start: :start_sandbox, stop: :stop_sandbox, delete: :delete_sandbox, snapshot: :snapshot,

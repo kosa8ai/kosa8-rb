@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 — 2026-11-03
+
+The sandbox toolbox, matching the Python SDK and the v0.13.0 daemon.
+
+- **Run code**: `run_code` (Python, JavaScript, TypeScript) returns `Kosa8::CodeResult`; matplotlib
+  charts come back in `artifacts` as `Kosa8::Artifact` with binary `data`.
+- **Files**: `list_files`, `stat_file`, `read_file` (binary String; a short body raises),
+  `read_text`, `write_file` (with `mode:`), `delete_file` (with `recursive:`), `make_dir`, `move_file`.
+- **Git**: `git(op, **fields)` returns `Kosa8::GitResult`, plus `git_clone`, `git_status` and
+  `git_commit`, which stages everything first (`add_all: false` to skip).
+- **Sessions**: `create_session`, `list_sessions`, `session_exec` (`Kosa8::ShellResult` with `cwd`),
+  `delete_session`, and `shell`, which makes the session the first time it is used.
+- **Terminals and previews**: `start_pty`, `resize_pty`, `create_preview`, `revoke_previews`.
+- **Lifecycle**: `set_lifecycle`, and `create_sandbox` takes `auto_stop_min:`, `ttl_min:`,
+  `auto_delete_min:`, `ephemeral:` and `template:`.
+- **Templates**: `list_templates`, `delete_template`, and `build_template`, which tars the context
+  folder (honouring `.dockerignore`) with the standard library, streams build output to a block or
+  `on_output:`, and raises `Kosa8::StreamError` when the build fails.
+- `Kosa8::Sandbox` gains every toolbox method that takes a sandbox.
+- `run_code` and `session_exec` wait for the daemon's own limit (5 min, or `timeout_s` when given)
+  plus 2 min, and git for 12 min, rather than Net::HTTP's 60 s default.
+
 ## 0.1.2 — 2026-11-03
 
 - **Concurrent checkpoints really no longer collide.** 0.1.1 retried by re-reading the
