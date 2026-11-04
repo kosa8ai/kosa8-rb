@@ -32,7 +32,7 @@ class CloudTest < Minitest::Test
 
   def test_key_and_address
     c = Kosa8::Cloud.new(env: { "KOSA8_API_KEY" => KEY })
-    assert_equal "https://api.kosa8.cloud", c.base_url
+    assert_equal "https://api.kosa8.com", c.base_url
     refute_includes c.inspect, KEY
     refute_includes c.to_s, KEY
     refute_includes c.sandboxes.inspect, KEY
@@ -110,10 +110,10 @@ class CloudTest < Minitest::Test
     assert_equal({ "events" => [1, 2], "concurrency" => 4 }, stub.seen[2][:body])
     spec = { "runtime" => "python3.12", "code" => "def handler(e):\n    return e\n" }
     assert_equal 1, cloud.functions.deploy("hello", spec)["version"]
-    assert_equal ["PUT", "https://api.kosa8.cloud/v1/functions/hello", spec], stub.seen[3].values_at(:method, :url, :body)
+    assert_equal ["PUT", "https://api.kosa8.com/v1/functions/hello", spec], stub.seen[3].values_at(:method, :url, :body)
     assert_equal ["hello"], cloud.functions.list.map { |f| f["name"] }
     cloud.functions.get("a b")
-    assert_equal "https://api.kosa8.cloud/v1/functions/a%20b", stub.seen[5][:url]
+    assert_equal "https://api.kosa8.com/v1/functions/a%20b", stub.seen[5][:url]
     assert_nil cloud.functions.delete("hello")
     assert_equal "DELETE", stub.seen[6][:method]
   end

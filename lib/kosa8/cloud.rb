@@ -27,7 +27,7 @@ module Kosa8
   # Errors are the SDK's usual typed errors; each carries the cloud's stable
   # +code+ (for example payment_required, quota_exceeded). Standard library only.
   class Cloud
-    DEFAULT_URL = "https://api.kosa8.cloud"
+    DEFAULT_URL = "https://api.kosa8.com"
     KEY_PREFIX = "k8c_live_"
     LOCAL_HOSTS = %w[localhost 127.0.0.1 ::1].freeze
 

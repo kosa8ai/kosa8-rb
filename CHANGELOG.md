@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-11-03
+
+- The default kosa8 Cloud address is now `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`, which kosa8 Cloud does not use). `KOSA8_CLOUD_URL` still overrides it.
+
 ## 0.3.0 — 2026-11-03
 
 kosa8 Cloud's API (api.kosa8.cloud) is not open yet; the `Kosa8Cloud` client is ready for when it is.

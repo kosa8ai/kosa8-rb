@@ -126,7 +126,7 @@ A new organization runs nothing until a payment method is on file; until
 then creating a sandbox raises `Kosa8::PaymentRequiredError` (`code`
 `payment_required`), whose message says what to do. Every error from the
 cloud carries its stable `code`. The address is `KOSA8_CLOUD_URL` (default
-`https://api.kosa8.cloud`, https only except localhost); `cloud.me` and
+`https://api.kosa8.com`, https only except localhost); `cloud.me` and
 `cloud.usage` show the org and this month's bill estimate.
 
 ## Development
