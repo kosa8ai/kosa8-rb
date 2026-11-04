@@ -14,7 +14,8 @@ module Kosa8
   TRANSIENT = /connection refused|EOF|connection reset|broken pipe|no such file or directory|stream ended|ECONNREFUSED|ECONNRESET|unreachable/i.freeze
 
   # Typed client for the kosa8 native API (/kosa8/v1) over the daemon's unix
-  # socket, or a remote worker via KOSA8_HOST / KOSA8_TOKEN.
+  # socket, or a remote worker via KOSA8_HOST / KOSA8_TOKEN, or the connection
+  # the CLI saved in ~/.kosa8/worker.json (`kosa8 wsl setup`, `kosa8 worker join`).
   #
   #   k = Kosa8::Client.new
   #   k.create_sandbox(name: "demo", egress: "deny")
@@ -26,9 +27,10 @@ module Kosa8
     attr_reader :transport, :checkpoints
 
     def initialize(socket_path: nil, host: nil, token: nil, insecure: false, actor: "tool", agent_token: nil,
-                   headers: {}, timeout: nil, checkpoint_store: nil, env: ENV)
+                   headers: {}, timeout: nil, checkpoint_store: nil, env: ENV, worker_file: nil)
       @transport = Transport.new(socket_path: socket_path, host: host, token: token, insecure: insecure, actor: actor,
-                                 agent_token: agent_token, headers: headers, timeout: timeout, env: env)
+                                 agent_token: agent_token, headers: headers, timeout: timeout, env: env,
+                                 worker_file: worker_file)
       @checkpoints = CheckpointBook.new(checkpoint_store || FileCheckpointStore.new)
       @stdin_sent = {}
       @stdin_mu = Mutex.new

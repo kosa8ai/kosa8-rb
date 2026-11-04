@@ -15,12 +15,13 @@ class ToolboxTest < Minitest::Test
   S = "/kosa8/v1/sandboxes/sb1"
 
   def setup
+    MockDaemon.require!(self)
     @d = MockDaemon.new
     @k = Kosa8::Client.new(socket_path: @d.socket_path, checkpoint_store: Kosa8::MemoryCheckpointStore.new, env: {})
   end
 
   def teardown
-    @d.close
+    @d&.close
   end
 
   def body

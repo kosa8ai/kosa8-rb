@@ -4,6 +4,7 @@ require "base64"
 require "json"
 require "net/http"
 require "openssl"
+require "rbconfig"
 require "socket"
 require "uri"
 
@@ -17,8 +18,16 @@ module Kosa8
     File.join(Dir.home, ".kosa8", "run", "kosa8.sock")
   end
 
-  # Where requests go: a unix socket or a remote worker.
-  Endpoint = Struct.new(:kind, :socket_path, :scheme, :host, :port, :base_path, :token, keyword_init: true) do
+  # $HOME/.kosa8/worker.json: the connection `kosa8 wsl setup` (Windows) and
+  # `kosa8 worker join` save, which the CLI uses whenever KOSA8_HOST is unset.
+  def self.default_worker_file
+    File.join(Dir.home, ".kosa8", "worker.json")
+  end
+
+  # Where requests go: a unix socket or a remote worker. default_socket is true
+  # when nothing chose the socket: no host, no saved worker, no socket_path.
+  Endpoint = Struct.new(:kind, :socket_path, :scheme, :host, :port, :base_path, :token, :default_socket,
+                        keyword_init: true) do
     def target
       kind == :unix ? "unix://#{socket_path}" : "#{scheme}://#{host}:#{port}"
     end
@@ -29,22 +38,54 @@ module Kosa8
     h == "localhost" || h == "::1" || h.start_with?("127.")
   end
 
-  # The CLI's KOSA8_HOST rules: no host means the local socket; https://,
-  # http://, tcp://, unix:// or a bare host:port select a worker; plain http to a
-  # non-loopback host is refused unless insecure (or KOSA8_INSECURE=1).
-  # KOSA8_TOKEN is used only for a host that came from KOSA8_HOST.
-  def self.resolve_endpoint(host: nil, socket_path: nil, token: nil, insecure: false, env: ENV)
-    explicit = !host.nil? && !host.empty?
-    raw = (explicit ? host : env["KOSA8_HOST"].to_s).strip.sub(%r{/+\z}, "")
-    return Endpoint.new(kind: :unix, socket_path: socket_path || default_socket_path) if raw.empty?
+  # The saved worker connection as {"host", "token", "insecure"}, or nil when
+  # the file is missing, unreadable, not a JSON object or names no host.
+  def self.load_saved_worker(path)
+    return nil if path.nil? || path == false || path.to_s.empty?
 
+    w = JSON.parse(File.read(path.to_s))
+    return nil unless w.is_a?(Hash) && w["host"].is_a?(String) && !w["host"].strip.empty?
+
+    { "host" => w["host"], "token" => w["token"].is_a?(String) ? w["token"] : nil, "insecure" => w["insecure"] == true }
+  rescue SystemCallError, IOError, JSON::ParserError, EncodingError
+    nil
+  end
+
+  # The CLI's rules (internal/cli/worker.go targetHost/targetToken/targetInsecure):
+  # 1. an explicit host:, or a non-blank KOSA8_HOST: https://, http://, tcp://,
+  #    unix:// or a bare host:port; KOSA8_TOKEN goes only to a KOSA8_HOST host;
+  # 2. else, unless socket_path: was given, the saved worker in worker_file
+  #    (nil = ~/.kosa8/worker.json, false or "" = none), with its token unless
+  #    token: is given, and its "insecure": true;
+  # 3. else the unix socket.
+  # Plain http to a non-loopback host is refused unless insecure (or KOSA8_INSECURE=1).
+  def self.resolve_endpoint(host: nil, socket_path: nil, token: nil, insecure: false, env: ENV, worker_file: nil)
+    explicit = !host.nil? && !host.empty?
+    raw = (explicit ? host : env["KOSA8_HOST"].to_s).strip
+    if raw.empty?
+      saved = socket_path.nil? ? load_saved_worker(worker_file.nil? ? default_worker_file : worker_file) : nil
+      if saved.nil?
+        return Endpoint.new(kind: :unix, socket_path: socket_path || default_socket_path,
+                            default_socket: socket_path.nil?)
+      end
+
+      tok = token.nil? || token.empty? ? saved["token"] : token
+      return parse_host(saved["host"].strip, token: tok, insecure: insecure || saved["insecure"], env: env,
+                                             source: "the saved worker host (#{worker_file || default_worker_file})")
+    end
+    token = env["KOSA8_TOKEN"] if (token.nil? || token.empty?) && !explicit
+    parse_host(raw, token: token, insecure: insecure, env: env, source: explicit ? "host" : "KOSA8_HOST")
+  end
+
+  def self.parse_host(raw, token:, insecure:, env:, source:)
+    raw = raw.sub(%r{/+\z}, "")
     h = raw.sub(%r{\A([A-Za-z][A-Za-z0-9+.-]*)://}) { "#{Regexp.last_match(1).downcase}://" }
     if h.start_with?("unix://")
-      return Endpoint.new(kind: :unix, socket_path: h.sub("unix://", ""))
+      return Endpoint.new(kind: :unix, socket_path: h.sub("unix://", ""), default_socket: false)
     elsif h.start_with?("tcp://")
       h = "http://" + h.sub("tcp://", "")
     elsif h =~ %r{\A([a-z][a-z0-9+.-]*)://} && !%w[http https].include?(Regexp.last_match(1))
-      raise Error, "KOSA8_HOST scheme \"#{Regexp.last_match(1)}\" is not supported; use http://, https://, tcp:// or unix://"
+      raise Error, "#{source} scheme \"#{Regexp.last_match(1)}\" is not supported; use http://, https://, tcp:// or unix://"
     elsif h !~ %r{\Ahttps?://}
       h = "http://" + h
     end
@@ -53,16 +94,20 @@ module Kosa8
     rescue URI::InvalidURIError
       nil
     end
-    raise Error, "KOSA8_HOST #{raw.inspect} names no host" if u.nil? || u.host.nil? || u.host.empty?
+    raise Error, "#{source} #{raw.inspect} names no host" if u.nil? || u.host.nil? || u.host.empty?
 
     if u.scheme == "http" && !insecure && env["KOSA8_INSECURE"] != "1" && !loopback?(u.host)
       raise Error, "refusing to talk to #{u.host}:#{u.port} over plain http: the token and every request would cross " \
                    "the network unencrypted. Use https://#{u.host}:#{u.port} (a worker behind a TLS-terminating tunnel " \
                    "or proxy), or pass insecure: true / KOSA8_INSECURE=1 if this link is already private and trusted"
     end
-    token = env["KOSA8_TOKEN"] if (token.nil? || token.empty?) && !explicit
     Endpoint.new(kind: :tcp, scheme: u.scheme, host: u.host, port: u.port, base_path: u.path.to_s.sub(%r{/+\z}, ""),
-                 token: token && !token.empty? ? token : nil)
+                 token: token && !token.empty? ? token : nil, default_socket: false)
+  end
+  private_class_method :parse_host
+
+  def self.windows?
+    RbConfig::CONFIG["host_os"] =~ /mswin|mingw|cygwin/ ? true : false
   end
 
   def self.enc(s)
@@ -74,6 +119,8 @@ module Kosa8
     attr_accessor :socket_path
 
     def connect
+      raise Errno::EAFNOSUPPORT, "unix sockets are not available in this Ruby" unless defined?(UNIXSocket)
+
       io = UNIXSocket.new(@socket_path)
       @socket = Net::BufferedIO.new(io, read_timeout: @read_timeout, continue_timeout: @continue_timeout,
                                         debug_output: @debug_output)
@@ -121,8 +168,9 @@ module Kosa8
     attr_reader :endpoint
 
     def initialize(socket_path: nil, host: nil, token: nil, insecure: false, actor: "tool", agent_token: nil,
-                   headers: {}, timeout: nil, env: ENV)
-      @endpoint = Kosa8.resolve_endpoint(host: host, socket_path: socket_path, token: token, insecure: insecure, env: env)
+                   headers: {}, timeout: nil, env: ENV, worker_file: nil)
+      @endpoint = Kosa8.resolve_endpoint(host: host, socket_path: socket_path, token: token, insecure: insecure, env: env,
+                                         worker_file: worker_file)
       raise Error, "actor must be human, agent or tool, not #{actor.inspect}" unless %w[human agent tool].include?(actor)
 
       @actor = actor
@@ -177,7 +225,13 @@ module Kosa8
         raise TimeoutError.new("#{method} #{path} timed out talking to #{@endpoint.target}: #{e.message}",
                                method: method, path: path)
       rescue SystemCallError, IOError, SocketError, OpenSSL::SSL::SSLError => e
-        hint = e.is_a?(Errno::ENOENT) || e.is_a?(Errno::ECONNREFUSED) ? " (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)" : ""
+        # Windows reports a missing unix socket path as ENETDOWN.
+        absent = e.is_a?(Errno::ENOENT) || e.is_a?(Errno::ECONNREFUSED) ||
+                 (Kosa8.windows? && @endpoint.kind == :unix && e.is_a?(Errno::ENETDOWN))
+        hint = absent ? " (is kosa8 installed and its daemon running? start it with `kosa8 daemon start`)" : ""
+        if @endpoint.kind == :unix && @endpoint.default_socket && Kosa8.windows?
+          hint += "; on Windows the engine runs in WSL2: run `kosa8 wsl setup`, or set KOSA8_HOST"
+        end
         raise ConnectionError.new("kosa8 daemon unreachable at #{@endpoint.target}: #{e.message}#{hint}",
                                   method: method, path: path)
       end

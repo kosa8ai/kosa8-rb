@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "base64"
+require "fileutils"
 require "json"
 require "socket"
 require "tmpdir"
@@ -10,10 +11,34 @@ class MockDaemon
   Req = Struct.new(:method, :path, :query, :headers, :body, keyword_init: true)
   attr_reader :socket_path, :requests
 
+  # Whether this platform can serve a unix socket (Windows may not); memoized.
+  def self.supported?
+    return @supported if defined?(@supported)
+
+    @supported = begin
+      d = new
+      d.close
+      true
+    rescue NotImplementedError, NameError, SystemCallError, IOError, SocketError
+      false
+    end
+  end
+
+  # Tests that need the mock daemon call this in setup.
+  def self.require!(test)
+    test.skip("unix-domain sockets are not available on this platform") unless supported?
+  end
+
   def initialize
-    @dir = Dir.mktmpdir("k8rb", "/tmp")
+    # A short base: sun_path is about 104 bytes.
+    @dir = File.directory?("/tmp") ? Dir.mktmpdir("k8rb", "/tmp") : Dir.mktmpdir("k8rb")
     @socket_path = File.join(@dir, "k.sock")
-    @server = UNIXServer.new(@socket_path)
+    begin
+      @server = UNIXServer.new(@socket_path)
+    rescue StandardError, NotImplementedError
+      FileUtils.rm_rf(@dir)
+      raise
+    end
     @routes = []
     @requests = []
     @mu = Mutex.new

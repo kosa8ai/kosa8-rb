@@ -4,9 +4,11 @@ module Kosa8
   # Every error this gem raises. The daemon's own words are kept in
   # +daemon_message+ and +remediation+, as @kosa8/sdk does.
   class Error < StandardError
-    attr_reader :status, :daemon_message, :remediation, :http_method, :path, :body
+    # +code+ is kosa8 Cloud's stable error code (payment_required, quota_exceeded, ...).
+    attr_reader :status, :daemon_message, :remediation, :http_method, :path, :body, :code
 
-    def initialize(message = nil, status: nil, daemon_message: nil, remediation: nil, method: nil, path: nil, body: nil)
+    def initialize(message = nil, status: nil, daemon_message: nil, remediation: nil, method: nil, path: nil, body: nil,
+                   code: nil)
       super(message)
       @status = status
       @daemon_message = daemon_message
@@ -14,6 +16,7 @@ module Kosa8
       @http_method = method
       @path = path
       @body = body
+      @code = code
     end
   end
 
@@ -25,6 +28,8 @@ module Kosa8
   class NotFoundError < ApiError; end     # 404
   class ConflictError < ApiError; end     # 409
   class UnsupportedError < ApiError; end  # 501
+  class PaymentRequiredError < ApiError; end # 402: kosa8 Cloud wants a payment method first
+  class RateLimitError < ApiError; end    # 429: too many requests, or a quota reached
 
   # 403 that a signed approval would lift; +approval+ is the daemon's refusal.
   class ApprovalRequiredError < PolicyError
@@ -54,13 +59,13 @@ module Kosa8
   class ProtocolError < Error; end
 
   BY_STATUS = {
-    400 => BadRequestError, 401 => AuthError, 403 => PolicyError,
-    404 => NotFoundError, 409 => ConflictError, 501 => UnsupportedError
+    400 => BadRequestError, 401 => AuthError, 402 => PaymentRequiredError, 403 => PolicyError,
+    404 => NotFoundError, 409 => ConflictError, 429 => RateLimitError, 501 => UnsupportedError
   }.freeze
 
   # The typed error for an HTTP error answer: the daemon's message with its
   # remediation in parentheses, as the CLI and MCP server print it.
-  def self.error_from_response(status, body, method:, path:)
+  def self.error_from_response(status, body, method:, path:, code: nil)
     msg = nil
     rem = nil
     approval = nil
@@ -73,7 +78,8 @@ module Kosa8
     end
     base = msg.is_a?(String) && !msg.empty? ? msg : "request failed with HTTP #{status}"
     text = rem ? "#{base} (#{rem})" : base
-    kw = { status: status, daemon_message: msg, remediation: rem, method: method, path: path, body: body }
+    kw = { status: status, daemon_message: msg, remediation: rem, method: method, path: path, body: body,
+           code: code }
     return ApprovalRequiredError.new(text, approval: approval, **kw) if approval
 
     (BY_STATUS[status] || ApiError).new(text, **kw)
