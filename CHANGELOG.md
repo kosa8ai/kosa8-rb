@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 — 2026-11-12
+
+kosa8 Cloud parity with the Python SDK. The default address stays `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
+
+- **Lifetime:** `cloud.sandboxes.create` takes `ttl_s:` (60 s to 90 days), `delete_after:` (Unix ms) and `accept_price:` (paid Store items); bad values raise `ArgumentError` before any request. New `CloudSandbox#update(ttl_s:, delete_after:, sleep_after_s:, clear_lifetime:)` (PATCH; `clear_lifetime: true` sends `ttl_s: null`) and `#notes`.
+- **Paging:** `cloud.sandboxes.list` still returns an Array and now takes `limit:` and `cursor:`. New `list_page` (a `Kosa8::CloudSandboxPage` with `sandboxes` and `next_cursor`) and `each(all:, page_size:)`, which follows `next_cursor` (an Enumerator without a block) and stops on a repeated cursor.
+- **Data plane** (needs the host's data plane; 501 `Kosa8::UnsupportedError` on hosts without it): `box.files` (`read` binary, `read_text`, `write`, `list`, `mkdir`, `delete(recursive:)`, raw `application/octet-stream` bodies), `box.checkpoint(label)`, `box.checkpoints`, `box.rewind(id)` (a `Kosa8::CloudRewindResult`), `box.fork(n)` and `box.ports`.
+- `cloud.templates`. New `cloud.request_bytes` for raw bodies.
+- **Errors:** `PaymentRequiredError#upgrade_url` and `#agent_message`. New `Kosa8::OrgFrozenError` (423 `org_frozen`) and `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec after about 30 s; also a client-side timeout on exec). `RateLimitError#retry_after` from Retry-After. A `transport:` may now return `[status, body, headers]`.
+- README: Cloud quickstart first; the base template (Alpine, busybox sh, fresh container per exec, only `/workspace` persists, 30 s exec limit, 64 KiB bodies, 8 MiB files); Cloud errors.
+
 ## 0.3.1 — 2026-11-03
 
 - The default kosa8 Cloud address is now `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`, which kosa8 Cloud does not use). `KOSA8_CLOUD_URL` still overrides it.
