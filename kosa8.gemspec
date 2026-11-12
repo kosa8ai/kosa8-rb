@@ -7,7 +7,7 @@ Gem::Specification.new do |s|
   s.version = Kosa8::VERSION
   s.summary = "Ruby SDK for kosa8: microVM sandboxes for AI agents"
   s.description = "Typed client for the kosa8 daemon: sandboxes, run/exec streams, snapshots, fork, " \
-                  "best-of-N explore and checkpoints shared with the kosa8 CLI. No dependencies."
+                  "best-of-N explore and checkpoints shared with the kosa8 CLI, plus the kosa8 Cloud API. No dependencies."
   s.authors = ["kosa8"]
   s.homepage = "https://kosa8.com"
   s.license = "MIT"

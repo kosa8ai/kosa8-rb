@@ -3,6 +3,105 @@
 The Ruby SDK for [kosa8](https://kosa8.com): microVM sandboxes for AI agents. No dependencies; Ruby 2.6+.
 Method for method it matches [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js), the Python `kosa8` package and `kosa8-go`.
 
+## Quickstart: kosa8 Cloud
+
+```sh
+gem install kosa8 -v 0.4.0
+# or in a Gemfile: gem "kosa8", "~> 0.4.0"
+export KOSA8_API_KEY=k8c_live_...   # made in the cloud dashboard
+```
+
+```ruby
+require "kosa8"
+
+cloud = Kosa8::Cloud.new  # KOSA8_API_KEY from the environment; or Kosa8::Cloud.new(api_key: "k8c_live_...")
+
+box = cloud.sandboxes.create(template: "python", ttl_s: 3600)  # deleted automatically after an hour
+r = box.exec(["python3", "-c", "print(6 * 7)"])
+puts r.exit_code, r.stdout     # 0, 42
+
+box.exec("echo hello > /workspace/hello.txt")  # only /workspace persists between commands
+puts box.exec("cat /workspace/hello.txt").stdout
+
+box.files.write("/workspace/app.py", "print('hi')\n")  # needs the host's data plane (see below)
+puts box.files.read_text("/workspace/app.py")
+
+box.sleep                      # costs only snapshot storage while asleep
+box.exec("ls /workspace")      # wakes it, files and all
+box.delete
+```
+
+`cloud.templates` lists the templates your org can start. Without `template:` you get the org's
+default, `base` (see below).
+
+### More of the Cloud API
+
+```ruby
+box.update(ttl_s: 7200)                 # PATCH: a new lifetime from now
+box.update(clear_lifetime: true)        # no automatic delete (sends ttl_s: null)
+box.update(sleep_after_s: 0)            # never sleep when idle
+
+cloud.sandboxes.list                    # an Array, as before; list(all: true) includes deleted ones
+cloud.sandboxes.each(all: true) { |b| puts "#{b.id} #{b.state} #{b.info["delete_after"]}" }  # every page
+page = cloud.sandboxes.list_page(limit: 50)  # one page: page.sandboxes, page.next_cursor (nil at the end)
+
+# These need the host's data plane. On a host without it they raise
+# Kosa8::UnsupportedError (501 not_available / not_supported): not every
+# kosa8 Cloud host has it yet.
+box.files.write("/workspace/data.bin", File.binread("data.bin"))  # bytes or text, at most 8 MiB
+bytes = box.files.read("/workspace/data.bin")                     # a binary String
+puts box.files.list("/workspace").map { |f| f["name"] }
+box.files.mkdir("/workspace/out")
+box.files.delete("/workspace/out", recursive: true)
+
+ckpt = box.checkpoint("before the risky bit")   # memory, processes and disk
+box.exec("rm -rf /workspace/*")
+r = box.rewind(ckpt["id"])                      # back; r.backup is the automatic checkpoint of the state before
+box.checkpoints                                 # oldest first
+forks = box.fork(4)                             # four live copies, CloudSandbox objects
+p box.ports                                     # listening TCP ports
+
+cloud.functions.deploy("hello", {
+  "runtime" => "python3.12",
+  "code" => "def handler(event):\n    return {\"hello\": event.get(\"name\", \"world\")}\n"
+})
+out = cloud.functions.invoke("hello", { "name" => "kosa8" })
+p out["ok"], out["result"]     # true, {"hello"=>"kosa8"}
+```
+
+`cloud.me` and `cloud.usage` show the org and this month's bill estimate. The address is
+`KOSA8_CLOUD_URL` (default `https://api.kosa8.com`, https only except localhost).
+
+### The base template
+
+- The `base` template is **Alpine Linux**: `sh` is busybox, and there is no `bash`, `python` or `git`.
+  Use `template: "python"` (or another key from `cloud.templates`) for Python, or pass `image:` to `exec`.
+- **Each `exec` runs in a fresh container, and only `/workspace` persists.** `cd`, `export` and anything
+  installed outside `/workspace` (`apk add`, a system `pip install`) are gone by the next command. Install
+  into `/workspace` (for example `pip install --target /workspace/lib ...` with `PYTHONPATH=/workspace/lib`),
+  or chain the steps in one `sh -c`.
+- **A buffered `exec` is cut off after about 30 seconds** and raises `Kosa8::ExecTimeoutError`. Run long
+  work in the background and poll it:
+  `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' &")`.
+- A request body (command and env) is at most 64 KiB; a file read or write is at most 8 MiB.
+- Set `ttl_s:` (60 s to 90 days) or `delete_after:` (Unix ms) on create so a crashed script cannot leave a
+  sandbox running. Bad values raise `ArgumentError` before any request.
+- The Cloud API has no sandbox labels or metadata.
+
+### Cloud errors
+
+| Error | When | What to do |
+|---|---|---|
+| `Kosa8::PaymentRequiredError` (402) | no payment method (`payment_required`), spending cap reached (`spending_cap_reached`), Store price not accepted (`price_not_accepted`) | show `e.upgrade_url`; an agent should relay `e.agent_message` to its person and stop |
+| `Kosa8::OrgFrozenError` (423, `org_frozen`) | the org is frozen in the Security Center | an owner or admin unfreezes it; retrying does not help |
+| `Kosa8::RateLimitError` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `e.retry_after` seconds when set, or delete sandboxes |
+| `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past about 30 s | run it in the background and poll |
+| `Kosa8::UnsupportedError` (501) | the host has no data plane yet (files, checkpoints, rewind, fork, ports) | use `exec`, or try later |
+
+Every Cloud error is a `Kosa8::ApiError` carrying the server's stable `e.code`, its message and `e.body`.
+
+## Local daemon
+
 ```ruby
 require "kosa8"
 
@@ -42,11 +141,11 @@ Where requests go, the same as the CLI:
 On Windows the engine runs in WSL2: run `kosa8 wsl setup` once and `Kosa8::Client.new` finds it.
 `client.transport.endpoint.target` shows where requests go.
 
-## Errors
+## Errors (local daemon)
 
 All errors inherit `Kosa8::Error` and carry the daemon's message and remediation:
 `ConnectionError`, `BadRequestError`, `AuthError`, `PolicyError` › `ApprovalRequiredError` (`#approval`),
-`NotFoundError`, `ConflictError`, `UnsupportedError`, `PaymentRequiredError` (402), `RateLimitError` (429), `StreamError` (`#stdout`/`#stderr` so far),
+`NotFoundError`, `ConflictError`, `UnsupportedError`, `PaymentRequiredError` (402), `OrgFrozenError` (423), `RateLimitError` (429), `ExecTimeoutError`, `StreamError` (`#stdout`/`#stderr` so far),
 `CheckpointError`, `TimeoutError`. Methods that a policy may gate take `approval:`.
 
 ## API
@@ -97,44 +196,13 @@ k.list_templates; k.delete_template("py-data")
 A non-zero exit or a failed git op is a result (`ok?` false), not an exception; a failed template build
 raises `Kosa8::StreamError`.
 
-## kosa8 Cloud
-
-The same sandboxes on kosa8 Cloud instead of the local daemon. Make an API
-key in the cloud dashboard and set `KOSA8_API_KEY`.
-
-```ruby
-require "kosa8"
-
-cloud = Kosa8::Cloud.new  # or Kosa8::Cloud.new(api_key: "k8c_live_...")
-
-box = cloud.sandboxes.create(template: "python", sleep_after_s: 600)
-r = box.exec(["python3", "-c", "print(6 * 7)"])
-puts r.exit_code, r.stdout     # 0, 42
-box.sleep                      # costs only snapshot storage while asleep
-box.exec("ls /workspace")      # wakes it, files and all
-box.delete
-
-cloud.functions.deploy("hello", {
-  "runtime" => "python3.12",
-  "code" => "def handler(event):\n    return {\"hello\": event.get(\"name\", \"world\")}\n"
-})
-out = cloud.functions.invoke("hello", { "name" => "kosa8" })
-p out["ok"], out["result"]     # true, {"hello"=>"kosa8"}
-```
-
-A new organization runs nothing until a payment method is on file; until
-then creating a sandbox raises `Kosa8::PaymentRequiredError` (`code`
-`payment_required`), whose message says what to do. Every error from the
-cloud carries its stable `code`. The address is `KOSA8_CLOUD_URL` (default
-`https://api.kosa8.com`, https only except localhost); `cloud.me` and
-`cloud.usage` show the org and this month's bill estimate.
-
 ## Development
 
 ```sh
 ruby -w test/test_client.rb      # mock daemon on a unix socket
 ruby -w test/test_toolbox.rb
 ruby -w test/test_cloud.rb       # stub transport and a local socket
+ruby -w test/test_cloud_parity.rb  # Cloud API parity, stub transport
 ruby -w -Ilib -Itest -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }'  # all, as CI does
 ruby examples/smoke.rb           # live, against a running `kosa8 daemon`
 ```
