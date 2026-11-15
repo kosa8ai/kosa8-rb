@@ -1,7 +1,5 @@
 # Changelog
 
-## Unreleased (on top of 0.4.0)
-
 The rest of the kosa8 Cloud API:
 
 - **Sized and Docker creates**: `create` takes `size:`, `cpus:`/`mem_mb:`, `image:`, `disk_gb:`,
@@ -17,7 +15,7 @@ The rest of the kosa8 Cloud API:
 - Every Cloud request sends `User-Agent: kosa8-ruby/<version>` (api.kosa8.com's edge refuses some
   default library user agents).
 
-## 0.4.0 — 2026-11-12
+## 0.4.0 — 2026-11-15
 
 kosa8 Cloud parity with the Python SDK. The default address stays `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
 
