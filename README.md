@@ -72,6 +72,56 @@ p out["ok"], out["result"]     # true, {"hello"=>"kosa8"}
 `cloud.me` and `cloud.usage` show the org and this month's bill estimate. The address is
 `KOSA8_CLOUD_URL` (default `https://api.kosa8.com`, https only except localhost).
 
+### Sized and Docker sandboxes, env, snapshots
+
+```ruby
+box = cloud.sandboxes.create(size: "4x8", image: "kosa8-template/universal-24.04-20261115.2",
+                             docker: true, env: { "NODE_ENV" => "production" }, name: "web",
+                             labels: { "team" => "a" }, ttl_s: 3600)
+# a sized create boots cold; create waits until it runs (wait: false to skip)
+
+snap = box.snapshot("warm")                         # durable: kept until deleted
+copy = cloud.sandboxes.create(snapshot: snap["id"])
+cloud.snapshots.delete(snap["id"])                  # also list, get
+```
+
+Also `cpus:`/`mem_mb:`, `disk_gb:`, `persistent:`, `cpu: "dedicated"`, `region:` (`us`, `eu` or
+an id), `secrets:` and `egress:`. `list` takes `name:` and `labels:`.
+
+### Background commands, previews, terminal and more
+
+```ruby
+job = box.exec_background("npm run build")          # no 30 s limit
+job = box.wait_background(job)                      # or background_exec(id) to poll once
+puts job["exit"], job["output"]
+
+puts box.previews.create(3000)["url"]               # private signed URL; public: true for none
+box.terminal(cols: 120, rows: 40)["url"]            # a wss:// PTY URL
+```
+
+- Files: `files.download(path)` / `files.upload(path, data)` (no 8 MiB cap), `files.link(path,
+  method: "PUT")` (presigned URL).
+- `egress`, `set_egress(presets: ["pypi"])`, `reset_egress`; `cloud.egress_presets`.
+- `run_code("print(6*7)", context: "a")` (stateful Python; persistent sandbox with python3),
+  `code_contexts`, `create_code_context`, `reset_code_context`, `delete_code_context`.
+- `schedules.create(cron: "0 * * * *", cmd: "date")`, `list`, `run`, `delete`.
+- `metrics`, `logs(limit:)`, `set_labels`, `secrets`; `cloud.capabilities`.
+
+### Secrets and Pipelines
+
+```ruby
+# Read the value from a file or $stdin, never from argv or code.
+cloud.secrets.set("npm-token", value: $stdin.read.strip, upstream: "https://registry.npmjs.org",
+                  pipelines: true)                  # also list, delete
+
+run = cloud.pipelines.run(repo_url: "https://github.com/me/app", ref: "main", secrets: ["npm-token"])
+run = cloud.pipelines.wait(run["id"])
+cloud.pipelines.logs(run["id"])["logs"].each { |l| puts l["text"] }
+```
+
+Also `runs`, `get`, `cancel`, `artifacts`, `download_artifact`, `create_hook` (webhook URL and
+optional `cron:`), `hooks`, `delete_hook`.
+
 ### The base template
 
 - The `base` template is **Alpine Linux**: `sh` is busybox, and there is no `bash`, `python` or `git`.
