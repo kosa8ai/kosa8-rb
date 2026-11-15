@@ -91,7 +91,7 @@ an id), `secrets:` and `egress:`. `list` takes `name:` and `labels:`.
 ### Background commands, previews, terminal and more
 
 ```ruby
-job = box.exec_background("npm run build")          # no 30 s limit
+job = box.exec_background("npm run build")          # no 90 s limit
 job = box.wait_background(job)                      # or background_exec(id) to poll once
 puts job["exit"], job["output"]
 
@@ -130,7 +130,7 @@ optional `cron:`), `hooks`, `delete_hook`.
   installed outside `/workspace` (`apk add`, a system `pip install`) are gone by the next command. Install
   into `/workspace` (for example `pip install --target /workspace/lib ...` with `PYTHONPATH=/workspace/lib`),
   or chain the steps in one `sh -c`.
-- **A buffered `exec` is cut off after about 30 seconds** and raises `Kosa8::ExecTimeoutError`. Run long
+- **A buffered `exec` runs at most 90 seconds** and raises `Kosa8::ExecTimeoutError`. Run long
   work in the background and poll it:
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' &")`.
 - A request body (command and env) is at most 64 KiB; a file read or write is at most 8 MiB.
@@ -145,7 +145,7 @@ optional `cron:`), `hooks`, `delete_hook`.
 | `Kosa8::PaymentRequiredError` (402) | no payment method (`payment_required`), spending cap reached (`spending_cap_reached`), Store price not accepted (`price_not_accepted`) | show `e.upgrade_url`; an agent should relay `e.agent_message` to its person and stop |
 | `Kosa8::OrgFrozenError` (423, `org_frozen`) | the org is frozen in the Security Center | an owner or admin unfreezes it; retrying does not help |
 | `Kosa8::RateLimitError` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `e.retry_after` seconds when set, or delete sandboxes |
-| `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past about 30 s | run it in the background and poll |
+| `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past its 90 s limit | run it in the background and poll |
 | `Kosa8::UnsupportedError` (501) | the host has no data plane yet (files, checkpoints, rewind, fork, ports) | use `exec`, or try later |
 
 Every Cloud error is a `Kosa8::ApiError` carrying the server's stable `e.code`, its message and `e.body`.
