@@ -108,7 +108,7 @@ module Kosa8
     end
 
     private def perform(method, path, body, data, raw)
-      headers = { "Authorization" => "Bearer #{@key}",
+      headers = { "Authorization" => "Bearer #{@key}", "User-Agent" => "kosa8-ruby/#{VERSION}",
                   "Accept" => raw ? "application/octet-stream" : "application/json" }
       payload = nil
       if !data.nil?

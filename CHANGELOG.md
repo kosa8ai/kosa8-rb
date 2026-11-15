@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (on top of 0.4.0)
+
+The rest of the kosa8 Cloud API:
+
+- **Sized and Docker creates**: `create` takes `size:`, `cpus:`/`mem_mb:`, `image:`, `disk_gb:`,
+  `persistent:`, `docker:`, `cpu:`, `name:`, `labels:`, `env:`, `secrets:`, `egress:`,
+  `snapshot:` and `wait:`; a cold boot is waited for with the new `wait_running`. `list` takes
+  `name:` and `labels:`.
+- **Background commands** (`exec_background`, `background_exec`, `wait_background`), **durable
+  snapshots** (`snapshot`, `cloud.snapshots`), **previews**, **terminal**, raw `files.download` /
+  `files.upload` and `files.link`, **egress**, **secrets** (`cloud.secrets`), **schedules**,
+  **code interpreter**, `metrics`, `logs`, `set_labels`, `cloud.capabilities`.
+- **Pipelines** (`cloud.pipelines`): `run`, `runs`, `get`, `wait`, `logs`, `cancel`,
+  `artifacts`, `download_artifact`, `create_hook`, `hooks`, `delete_hook`.
+- Every Cloud request sends `User-Agent: kosa8-ruby/<version>` (api.kosa8.com's edge refuses some
+  default library user agents).
+
 ## 0.4.0 — 2026-11-12
 
 kosa8 Cloud parity with the Python SDK. The default address stays `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
