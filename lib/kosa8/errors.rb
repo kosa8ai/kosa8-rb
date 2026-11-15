@@ -28,8 +28,39 @@ module Kosa8
   class NotFoundError < ApiError; end     # 404
   class ConflictError < ApiError; end     # 409
   class UnsupportedError < ApiError; end  # 501
-  class PaymentRequiredError < ApiError; end # 402: kosa8 Cloud wants a payment method first
-  class RateLimitError < ApiError; end    # 429: too many requests, or a quota reached
+
+  # 402: kosa8 Cloud wants a payment method, credit or an accepted price first
+  # (+code+ payment_required, spending_cap_reached, price_not_accepted, ...).
+  class PaymentRequiredError < ApiError
+    # Where the person adds a payment method or credit; nil when the answer has none.
+    def upgrade_url
+      Kosa8.body_str(body, "upgrade_url")
+    end
+
+    # A sentence an AI agent should relay to its person word for word; nil when absent.
+    def agent_message
+      Kosa8.body_str(body, "agent_message")
+    end
+  end
+
+  # 429: too many requests, or a quota reached (+code+ quota_exceeded).
+  # +retry_after+ is the server's Retry-After in seconds, when it sent one.
+  class RateLimitError < ApiError
+    attr_accessor :retry_after
+  end
+
+  # 423 (+code+ org_frozen): the org is frozen in the Security Center. New
+  # sandboxes, commands, wakes and function calls are refused until an owner or
+  # admin unfreezes it; retrying does not help.
+  class OrgFrozenError < ApiError; end
+
+  # A kosa8 Cloud exec ran past the API's limit for a buffered command. Today a
+  # buffered exec is cut off after about 30 s (HTTP 502 host_failed "timed out";
+  # later servers answer 504 exec_timeout). Run long work in the background,
+  # writing to /workspace, and poll it:
+  #
+  #   box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1' &")
+  class ExecTimeoutError < ApiError; end
 
   # 403 that a signed approval would lift; +approval+ is the daemon's refusal.
   class ApprovalRequiredError < PolicyError
@@ -60,8 +91,15 @@ module Kosa8
 
   BY_STATUS = {
     400 => BadRequestError, 401 => AuthError, 402 => PaymentRequiredError, 403 => PolicyError,
-    404 => NotFoundError, 409 => ConflictError, 429 => RateLimitError, 501 => UnsupportedError
+    404 => NotFoundError, 409 => ConflictError, 423 => OrgFrozenError, 429 => RateLimitError,
+    501 => UnsupportedError
   }.freeze
+
+  # body[key] when it is a non-empty String, else nil.
+  def self.body_str(body, key)
+    v = body.is_a?(Hash) ? body[key] : nil
+    v.is_a?(String) && !v.empty? ? v : nil
+  end
 
   # The typed error for an HTTP error answer: the daemon's message with its
   # remediation in parentheses, as the CLI and MCP server print it.
