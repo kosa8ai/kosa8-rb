@@ -1,6 +1,41 @@
 # Changelog
 
-The rest of the kosa8 Cloud API:
+## 0.5.0 — unreleased
+
+RL training and fan-out on kosa8 Cloud (the API of kosa8 Cloud's RL release):
+
+- **Fan-out:** `cloud.sandboxes.create_many(count, ...)` (POST /v1/sandboxes/batch, up to 1000, a
+  `Kosa8::SandboxBatch` with `failed`, `requested`, `created`, `run_id`). `box.fork(n)` now takes
+  up to 1000 and `labels:`, `run_id:`, `lease_s:`, `prefix:`, `partial_ok:`, `idempotency_key:`,
+  and returns a `SandboxBatch` (still an Array). `create` takes `lease_s:`, `run_id:` and
+  `idempotency_key:`.
+- **Leases:** `cloud.sandboxes.heartbeat(run_id:/labels:/ids:, extend_s:)`, `box.heartbeat`,
+  `cloud.sandboxes.drain(...)` (calls again while the server says there are more), and
+  `Kosa8::RL::Lease`.
+- **Sealed grader:** `box.grade(cmd, files:, timeout_s:, env:, keep:, run_id:, rollout:)` and
+  `cloud.sandboxes.grade(id, ...)`, a `Kosa8::GradeResult`.
+- **Idempotency-Key** on create, batch, fork and grade (a UUID by default), the same on every retry.
+- **Retries:** `Kosa8::RetryPolicy` (3 tries, exponential backoff with full jitter, at least the
+  server's Retry-After), on by default where safe (reads, PUTs, deletes, heartbeats, drains, keyed
+  POSTs, and any 429); `Cloud.new(retry_policy: Kosa8::RetryPolicy::NONE)` turns it off,
+  `sleeper:` replaces the waits. `Kosa8.with_retry`.
+- **Failure classes:** every `Kosa8::Error` has `failure_class` and `retryable?`
+  (`Kosa8.classify_failure`, `Kosa8.failure_of`) and `retry_after` (Retry-After seconds or HTTP
+  date, or the body's `retry_after_s`); `CloudExecResult` has `failure_class` and `retryable`.
+- **fork_map:** `box.fork_map(items, concurrency:, retries:, timeout_s:, ...) { |child, item| }`
+  and `cloud.fork_map(base, items, ...)`, `Kosa8::ForkResult`s in order; every fork deleted, Ctrl-C
+  included.
+- **RL runs:** `Kosa8::RL::Run` (`open`, `start`, `record`, `flush` in batches of at most 500,
+  `finish`, `summary`, `update`, `rollouts`, `export`, `drain`, `Run.list`, `Run.attach`) and
+  `Run#map` (one training step: fork, solve, sealed grade, record, with masking of infra, quota
+  and harness failures), `Kosa8::RL::Rollouts`, `RolloutResult`.
+- **Org templates:** `cloud.org_templates` (`build`, `import`, `list`, `get`, `delete`, `wait_ready`).
+- **Capability tokens:** `cloud.tokens` (`create`, `list`, `revoke`); `Cloud.new` takes a
+  `k8c_tok_` token as its key.
+- `Cloud::MAX_FORK` is now 1000. Requests that used to fail at once on a 5xx (reads, deletes) are
+  now retried; pass `retry_policy: Kosa8::RetryPolicy::NONE` for the old behaviour.
+
+Also in 0.5.0, the rest of the kosa8 Cloud API:
 
 - **Sized and Docker creates**: `create` takes `size:`, `cpus:`/`mem_mb:`, `image:`, `disk_gb:`,
   `persistent:`, `docker:`, `cpu:`, `name:`, `labels:`, `env:`, `secrets:`, `egress:`,

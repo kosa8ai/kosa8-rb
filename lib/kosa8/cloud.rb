@@ -4,14 +4,23 @@ require "json"
 require "net/http"
 require "openssl"
 require "socket"
+require "securerandom"
+require "time"
 require "uri"
 
 module Kosa8
   # The outcome of a cloud exec. +woke_ms+ is set when the sandbox was asleep
   # and woke for this command.
-  CloudExecResult = Struct.new(:exit_code, :stdout, :stderr, :woke_ms, keyword_init: true) do
+  # +failure_class+ is "ok" (exit 0), "exit_nonzero" (the command failed) or
+  # "infra" (the host gave no exit code; +retryable+ true).
+  CloudExecResult = Struct.new(:exit_code, :stdout, :stderr, :woke_ms, :failure_class, :retryable,
+                               keyword_init: true) do
     def ok?
       exit_code == 0 # exit_code is nil when the command never ran
+    end
+
+    def retryable?
+      retryable == true
     end
   end
 
@@ -42,33 +51,56 @@ module Kosa8
   class Cloud
     DEFAULT_URL = "https://api.kosa8.com"
     KEY_PREFIX = "k8c_live_"
+    # A capability token from cloud.tokens.create works as a key too.
+    TOKEN_PREFIX = "k8c_tok_"
     LOCAL_HOSTS = %w[localhost 127.0.0.1 ::1].freeze
     # A ttl_s is from 60 seconds to 90 days.
     MIN_TTL_S = 60
     MAX_TTL_S = 7_776_000
     # sleep_after_s is from 0 (never) to 7 days.
     MAX_SLEEP_AFTER_S = 604_800
-    # A fork makes from 1 to 100 copies.
-    MAX_FORK = 100
+    # A fork makes from 1 to 1000 copies in one call.
+    MAX_FORK = 1000
     # The limit kosa8 Cloud puts on a buffered exec today, in seconds.
     EXEC_LIMIT_S = 30
     EXEC_HINT = "a buffered exec is limited to about #{EXEC_LIMIT_S} s; run long work in the background, " \
                 "writing to /workspace, and poll it"
 
     attr_reader :base_url, :timeout, :sandboxes, :functions
+    # The RetryPolicy applied to every request where trying again is safe.
+    attr_accessor :retry_policy
+    # How retries and polls wait: a callable taking seconds (default Kernel#sleep).
+    attr_accessor :sleeper
+    # Set by Kosa8::RL::Run while it is open: {"run_id" => id, "lease_s" => s}
+    # given to every create, batch, fork and grade that does not name its own.
+    attr_accessor :run_defaults
 
     # transport: an optional callable (method, url, headers, body_or_nil, timeout) -> [status, body_string]
     # or [status, body_string, response_headers], used instead of Net::HTTP (tests, proxies).
-    def initialize(api_key: nil, base_url: nil, env: ENV, timeout: 120, transport: nil)
+    #
+    # retry_policy: (default RetryPolicy.new: 3 tries, backoff with full
+    # jitter) is applied where trying again is safe: reads, PUTs, deletes,
+    # heartbeats and drains on infra failures; the calls that make sandboxes
+    # (create, batch, fork, grade), which carry an Idempotency-Key reused on
+    # every retry; and any request answered 429, waiting at least its
+    # Retry-After. RetryPolicy::NONE turns it off. sleeper: replaces
+    # Kernel#sleep for those waits (tests).
+    def initialize(api_key: nil, base_url: nil, env: ENV, timeout: 120, transport: nil, retry_policy: nil,
+                   sleeper: nil)
       key = (api_key.nil? ? env["KOSA8_API_KEY"].to_s : api_key.to_s).strip
       raise Error, "no kosa8 Cloud API key: pass api_key: or set KOSA8_API_KEY" if key.empty?
-      raise Error, "a kosa8 Cloud API key starts with #{KEY_PREFIX}" unless key.start_with?(KEY_PREFIX)
+      unless key.start_with?(KEY_PREFIX) || key.start_with?(TOKEN_PREFIX)
+        raise Error, "a kosa8 Cloud API key starts with #{KEY_PREFIX} (a capability token with #{TOKEN_PREFIX})"
+      end
 
       @key = key
       base = [base_url, env["KOSA8_CLOUD_URL"]].find { |v| v && !v.to_s.empty? } || DEFAULT_URL
       @base_url = Cloud.check_base(base.to_s)
       @timeout = timeout
       @transport = transport || method(:net_http)
+      @retry_policy = retry_policy || RetryPolicy.new
+      @sleeper = sleeper || Kernel.method(:sleep)
+      @run_defaults = nil
       @sandboxes = CloudSandboxes.new(self)
       @functions = CloudFunctions.new(self)
     end
@@ -95,21 +127,70 @@ module Kosa8
       r.is_a?(Hash) ? (r["templates"] || []) : []
     end
 
-    # One JSON request; raises the typed error for an error answer.
-    def request(method, path, body = nil)
-      perform(method, path, body, nil, false)
+    # One JSON request, retried as retry_policy allows; raises the typed
+    # error for an error answer. A call that makes sandboxes (Cloud.keyed?)
+    # sends +idempotency_key+ (a new UUID when not given), the same on every
+    # retry, so it may be retried after a timeout or a 5xx too.
+    #
+    # +opts+ (a Hash, not keywords, so an empty body Hash stays the body):
+    # :idempotency_key and :retry_policy.
+    def request(method, path, body = nil, opts = nil)
+      opts ||= {}
+      perform(method, path, body, nil, false, opts[:idempotency_key], opts[:retry_policy])
     end
 
     # One request whose body is +data+ (raw bytes, application/octet-stream)
     # when given; with +raw+ a successful answer's bytes come back as a binary
     # String instead of parsed JSON. Raises the typed error for an error answer.
-    def request_bytes(method, path, data: nil, raw: false)
-      perform(method, path, nil, data, raw)
+    def request_bytes(method, path, data: nil, raw: false, retry_policy: nil)
+      perform(method, path, nil, data, raw, nil, retry_policy)
     end
 
-    private def perform(method, path, body, data, raw)
+    # Methods safe to send twice. Other POSTs are retried only on 429 (refused
+    # before anything was done), unless they carry an Idempotency-Key.
+    IDEMPOTENT_METHODS = %w[GET HEAD PUT DELETE].freeze
+    IDEMPOTENT_POSTS = %w[/v1/sandboxes/heartbeat /v1/sandboxes/drain].freeze
+    # The POSTs kosa8 Cloud keeps an Idempotency-Key for (24 hours).
+    KEYED_POSTS = %r{\A/v1/sandboxes(/batch|/[A-Za-z0-9_%]{1,64}/(fork|grade))?\z}.freeze
+    IDEMPOTENCY_KEY = /\A[\x21-\x7e]{1,255}\z/.freeze
+
+    # Whether kosa8 Cloud honours an Idempotency-Key on this call.
+    def self.keyed?(method, path)
+      method == "POST" && KEYED_POSTS.match?(path.to_s.split("?", 2)[0])
+    end
+
+    def self.check_idempotency_key(key)
+      return if key.nil? || (key.is_a?(String) && IDEMPOTENCY_KEY.match?(key))
+
+      raise ArgumentError, "idempotency_key must be 1-255 printable ASCII characters, e.g. a UUID"
+    end
+
+    private def perform(method, path, body, data, raw, idempotency_key, policy)
+      Cloud.check_idempotency_key(idempotency_key)
+      extra = {}
+      if !idempotency_key.nil? || Cloud.keyed?(method, path)
+        extra["Idempotency-Key"] = idempotency_key || SecureRandom.uuid
+      end
+      policy ||= @retry_policy
+      bare = path.to_s.split("?", 2)[0]
+      safe = !extra.empty? || IDEMPOTENT_METHODS.include?(method) || IDEMPOTENT_POSTS.include?(bare)
+      attempt = 1
+      loop do
+        begin
+          return perform_once(method, path, body, data, raw, extra)
+        rescue Error => e
+          raise unless policy.retry?(e, attempt) && (safe || e.status == 429)
+
+          @sleeper.call(policy.delay(e, attempt))
+          attempt += 1
+        end
+      end
+    end
+
+    private def perform_once(method, path, body, data, raw, extra)
       headers = { "Authorization" => "Bearer #{@key}", "User-Agent" => "kosa8-ruby/#{VERSION}",
                   "Accept" => raw ? "application/octet-stream" : "application/json" }
+      headers.update(extra)
       payload = nil
       if !data.nil?
         headers["Content-Type"] = "application/octet-stream"
@@ -165,7 +246,11 @@ module Kosa8
             Kosa8.error_from_response(status, msg_body, method: method, path: path, code: code)
           end
       e.instance_variable_set(:@body, body)
-      e.retry_after = retry_after(headers) if e.is_a?(RateLimitError)
+      e.retry_after = retry_after(headers)
+      if e.retry_after.nil? && body.is_a?(Hash)
+        ra = body["retry_after_s"] # e.g. 409 idempotency_in_progress, 503 no_capacity
+        e.retry_after = ra.to_f if ra.is_a?(Numeric) && ra.positive?
+      end
       e
     end
 
@@ -180,16 +265,25 @@ module Kosa8
       status == 502 && exec_path?(path) && message.downcase.include?("timed out")
     end
 
-    # Retry-After in seconds (a number), or nil.
-    def self.retry_after(headers)
+    # Retry-After in seconds (delta-seconds or an HTTP date), or nil.
+    def self.retry_after(headers, now: Time.now)
       return nil unless headers.respond_to?(:each)
 
       v = nil
       headers.each { |k, val| v = val if k.to_s.casecmp("retry-after").zero? }
       v = v.first if v.is_a?(Array)
-      Float(v.to_s.strip)
-    rescue ArgumentError, TypeError
-      nil
+      return nil if v.nil?
+
+      s = v.to_s.strip
+      begin
+        Float(s)
+      rescue ArgumentError, TypeError
+        begin
+          [Time.httpdate(s) - now, 0.0].max
+        rescue ArgumentError
+          nil
+        end
+      end
     end
 
     # Argument checks shared by create and update; raise ArgumentError before any request.
@@ -376,8 +470,11 @@ module Kosa8
       body["image"] = image unless image.nil?
       body["env"] = env.map { |k, v| "#{k}=#{v}" } if env && !env.empty?
       r = @cloud.request("POST", path("/exec"), body)
+      fc, rt = Kosa8.exec_failure(r["exit"])
+      fc = r["failure_class"] if r["failure_class"].is_a?(String)
+      rt = r["retryable"] if r["retryable"] == true || r["retryable"] == false
       CloudExecResult.new(exit_code: r["exit"], stdout: r["stdout"] || "", stderr: r["stderr"] || "",
-                          woke_ms: r["woke_ms"])
+                          woke_ms: r["woke_ms"], failure_class: fc, retryable: rt)
     end
 
     # Snapshot it and free its VM; it then costs only snapshot storage.
@@ -482,21 +579,33 @@ module Kosa8
       CloudRewindResult.new(checkpoint: r["checkpoint"] || {}, backup: r["backup"], ms: r["ms"])
     end
 
-    # +n+ (1 to 100) live copies of the sandbox as it is now, on its host, as
-    # an Array of CloudSandbox. Each is held to the rules of a create
-    # (payment, quotas); all or nothing.
+    # +n+ (1 to 1000) live copies of the sandbox as it is now, on its host, as
+    # a SandboxBatch (an Array of CloudSandbox with +failed+). Each is held to
+    # the rules of a create (payment, quotas).
+    #
+    # labels: go on every copy, run_id: labels them kosa8.run=<run_id>
+    # (heartbeat and drain select by it), lease_s: (60..86400) deletes each
+    # lease_s from now unless heartbeats extend it, prefix: names them
+    # <prefix>-0001, ... With partial_ok: true copies that could not be made
+    # (no room on the host, the running limit) are listed in +failed+ instead
+    # of failing the call; false is all or nothing. The API's default is true
+    # when a fan-out option is given or n is over 100. A fork that made none
+    # raises the first refusal. The call carries an Idempotency-Key
+    # (+idempotency_key+, default a new UUID) reused on every retry.
     #
     # Needs the host's data plane; on hosts without it the API answers 501
     # (not_available/not_supported), raised as Kosa8::UnsupportedError. Not
     # every kosa8 Cloud host has it yet.
-    def fork(n = 1)
+    def fork(n = 1, labels: nil, run_id: nil, lease_s: nil, prefix: nil, partial_ok: nil, idempotency_key: nil)
       unless n.is_a?(Integer) && n.between?(1, Cloud::MAX_FORK)
         raise ArgumentError, "n must be a whole number from 1 to #{Cloud::MAX_FORK}"
       end
 
-      r = @cloud.request("POST", path("/fork"), { "n" => n })
-      r = {} unless r.is_a?(Hash)
-      (r["sandboxes"] || []).map { |s| CloudSandbox.new(@cloud, s) }
+      body = { "n" => n }.merge(Cloud.fanout_body(@cloud, labels: labels, run_id: run_id, lease_s: lease_s,
+                                                          prefix: prefix, partial_ok: partial_ok))
+      Cloud.check_idempotency_key(idempotency_key)
+      r = @cloud.request("POST", path("/fork"), body, idempotency_key: idempotency_key)
+      SandboxBatch.from(@cloud, r, n)
     end
 
     # TCP ports listening in its running containers (Hashes: "port",

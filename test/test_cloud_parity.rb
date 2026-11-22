@@ -57,7 +57,7 @@ class CloudParityTest < Minitest::Test
   end
 
   def test_version
-    assert_equal "0.4.0", Kosa8::VERSION
+    assert_equal "0.5.0", Kosa8::VERSION
   end
 
   def test_create_with_lifetime_and_price
@@ -269,7 +269,7 @@ class CloudParityTest < Minitest::Test
     assert_raises(ArgumentError) { b.checkpoint("x" * 201) }
     assert_raises(ArgumentError) { b.rewind("") }
     assert_raises(ArgumentError) { b.fork(0) }
-    assert_raises(ArgumentError) { b.fork(101) }
+    assert_raises(ArgumentError) { b.fork(1001) }
     assert_raises(ArgumentError) { b.fork(1.5) }
     assert_equal n, stub.seen.size
   end

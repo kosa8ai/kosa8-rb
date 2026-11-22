@@ -1,11 +1,16 @@
 # frozen_string_literal: true
 
+require "timeout"
+
 module Kosa8
   # Every error this gem raises. The daemon's own words are kept in
   # +daemon_message+ and +remediation+, as @kosa8/sdk does.
   class Error < StandardError
     # +code+ is kosa8 Cloud's stable error code (payment_required, quota_exceeded, ...).
     attr_reader :status, :daemon_message, :remediation, :http_method, :path, :body, :code
+    # Seconds the server asked to wait before trying again (Retry-After, or
+    # the body's retry_after_s), when it said.
+    attr_accessor :retry_after
 
     def initialize(message = nil, status: nil, daemon_message: nil, remediation: nil, method: nil, path: nil, body: nil,
                    code: nil)
@@ -18,6 +23,18 @@ module Kosa8
       @body = body
       @code = code
     end
+
+    # Whose fault it was: "ok", "exit_nonzero", "timeout", "infra", "quota",
+    # "client", or "error" (not an API answer). See Kosa8.classify_failure.
+    def failure_class
+      Kosa8.classify_failure(self)[0]
+    end
+
+    # Whether the same call may work if sent again.
+    def retryable?
+      Kosa8.classify_failure(self)[1]
+    end
+    alias retryable retryable?
   end
 
   class ConnectionError < Error; end # daemon unreachable
@@ -45,9 +62,7 @@ module Kosa8
 
   # 429: too many requests, or a quota reached (+code+ quota_exceeded).
   # +retry_after+ is the server's Retry-After in seconds, when it sent one.
-  class RateLimitError < ApiError
-    attr_accessor :retry_after
-  end
+  class RateLimitError < ApiError; end
 
   # 423 (+code+ org_frozen): the org is frozen in the Security Center. New
   # sandboxes, commands, wakes and function calls are refused until an owner or
@@ -121,5 +136,68 @@ module Kosa8
     return ApprovalRequiredError.new(text, approval: approval, **kw) if approval
 
     (BY_STATUS[status] || ApiError).new(text, **kw)
+  end
+
+  # The failure classes kosa8 Cloud puts on every answer under /v1/sandboxes.
+  FAILURE_CLASSES = %w[ok exit_nonzero timeout infra quota client].freeze
+  INFRA_CODES = %w[host_failed not_ready no_capacity host_unreachable host_unavailable host_busy host_restarting
+                   wake_failed try_again internal kernel_failed egress_failed dns_unreachable host_lost host_removed
+                   insufficient_storage starting].freeze
+  RATE_CODES = %w[rate_limited slow_down too_soon].freeze
+  QUOTA_CODES = %w[quota_exceeded running_limit plan_required plan_limit plan_feature payment_required payment_declined
+                   spending_cap_reached snapshot_limit org_frozen org_suspended too_many_runs].freeze
+  IDEMPOTENCY_IN_PROGRESS = "idempotency_in_progress"
+
+  # [failure_class, retryable] for an HTTP status and error code, by the
+  # server's own rules (workers/cloud-api failures.js), for answers that came
+  # without failure_class (an older server, a proxy).
+  def self.failure_of(status, code = nil)
+    c = code.is_a?(String) ? code : ""
+    return ["ok", false] if status < 400
+    return ["timeout", false] if c == "exec_timeout"
+    return ["timeout", true] if c.include?("timeout")
+    return ["quota", true] if RATE_CODES.include?(c)
+    return ["quota", false] if QUOTA_CODES.include?(c) || status == 402 || status == 423
+    return ["quota", c != "quota_exceeded"] if status == 429
+    return ["infra", false] if c == "not_available" || c == "not_supported" || status == 501
+    return ["infra", true] if INFRA_CODES.include?(c) || status >= 500
+
+    ["client", false]
+  end
+
+  # [failure_class, retryable] of an exec that ran: ok on exit 0,
+  # exit_nonzero on any other exit, infra when there was no exit code.
+  def self.exec_failure(exit_code)
+    return ["infra", true] unless exit_code.is_a?(Integer)
+
+    [exit_code.zero? ? "ok" : "exit_nonzero", false]
+  end
+
+  # [failure_class, retryable] for any exception. A kosa8 Cloud error body's
+  # failure_class and retryable are used as sent; 409 idempotency_in_progress
+  # is retryable (the first request with that key is still running); no
+  # answer at all is infra (retryable); an exec past its limit is timeout;
+  # else the server's rules (Kosa8.failure_of). An exception that is not a
+  # Kosa8::Error is "error" (not retryable): a bug in your code.
+  def self.classify_failure(exc)
+    return ["client", true] if exc.is_a?(Error) && exc.code == IDEMPOTENCY_IN_PROGRESS
+
+    body = exc.respond_to?(:body) ? exc.body : nil
+    if body.is_a?(Hash) && body["failure_class"].is_a?(String)
+      fc = body["failure_class"]
+      rt = body["retryable"]
+      return [fc, rt == true || rt == false ? rt : fc == "infra"]
+    end
+    unless exc.is_a?(Error)
+      return ["infra", true] if exc.is_a?(SystemCallError) || exc.is_a?(IOError) || exc.is_a?(SocketError) ||
+                                exc.is_a?(::Timeout::Error)
+
+      return ["error", false]
+    end
+    return ["timeout", false] if exc.is_a?(ExecTimeoutError)
+    return ["infra", true] if exc.is_a?(ConnectionError) || exc.is_a?(TimeoutError)
+    return ["error", false] if exc.status.nil?
+
+    failure_of(exc.status, exc.code)
   end
 end
