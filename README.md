@@ -7,7 +7,7 @@ Method for method it matches [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js)
 
 ```sh
 gem install kosa8 -v 0.4.0
-# or in a Gemfile: gem "kosa8", "~> 0.4.0"
+# or in a Gemfile: gem "kosa8", "~> 0.5.0"
 export KOSA8_API_KEY=k8c_live_...   # made in the cloud dashboard
 ```
 
@@ -121,6 +121,47 @@ cloud.pipelines.logs(run["id"])["logs"].each { |l| puts l["text"] }
 
 Also `runs`, `get`, `cancel`, `artifacts`, `download_artifact`, `create_hook` (webhook URL and
 optional `cron:`), `hooks`, `delete_hook`.
+
+### RL training and fan-out
+
+```ruby
+# Many sandboxes at once, leased: deleted 10 minutes after the last heartbeat.
+batch = cloud.sandboxes.create_many(64, template: "python", run_id: "exp-1", lease_s: 600, prefix: "roll")
+batch.failed                                  # what could not be made, with failure_class
+cloud.sandboxes.heartbeat(run_id: "exp-1")    # keep them alive
+cloud.sandboxes.drain(run_id: "exp-1")        # delete them all
+
+# Forks of a prepared sandbox, 16 at a time; every fork is deleted, Ctrl-C included.
+results = base.fork_map(tasks, concurrency: 16, retries: 2) { |child, task| child.exec(task["cmd"]).stdout }
+
+# Grade in a sealed copy: hidden files, no network; the solver never sees them.
+g = box.grade(%w[python /grader/test.py], files: { "/grader/test.py" => File.read("test.py") })
+g.reward          # nil when the grader did not finish (failure_class timeout or infra)
+
+# A training run: rollouts recorded on kosa8 Cloud (app.kosa8.com, RL runs).
+Kosa8::RL::Run.open(cloud, "grpo-1", lease_s: 600) do |run|
+  rollouts = run.map(base, tasks, grade_cmd: %w[python /grader/test.py], group_size: 8) do |sandbox, task|
+    sandbox.exec(["python", "agent.py", task["prompt"]])
+  end
+  rollouts.rewards  # nil where masked (infra, quota or your own exception), never 0
+  rollouts.groups   # per task, for group-relative advantages
+end
+```
+
+Create, batch, fork and grade send an `Idempotency-Key` (a UUID, or `idempotency_key:`) that every
+retry reuses, so a retry after a timeout never doubles the fleet. Retries (`Kosa8::RetryPolicy`:
+3 tries, backoff with full jitter, at least Retry-After) apply only where safe; every error has
+`failure_class` (`ok`, `exit_nonzero`, `timeout`, `infra`, `quota`, `client`, `error`) and
+`retryable?`.
+
+```ruby
+cloud.org_templates.build("swe-task-1", image: "ghcr.io/org/task@sha256:...")  # kept as a snapshot
+cloud.org_templates.wait_ready("swe-task-1")
+cloud.sandboxes.create(template: "swe-task-1")                                    # a restore, ~1 s
+
+tok = cloud.tokens.create(["sandboxes:read", "sandboxes:write"], sandbox_ids: [box.id], ttl_s: 3600)
+Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your API key
+```
 
 ### The base template
 
@@ -253,6 +294,7 @@ ruby -w test/test_client.rb      # mock daemon on a unix socket
 ruby -w test/test_toolbox.rb
 ruby -w test/test_cloud.rb       # stub transport and a local socket
 ruby -w test/test_cloud_parity.rb  # Cloud API parity, stub transport
+ruby -w test/test_cloud_rl.rb      # RL and fan-out, a fake Cloud API on a local socket
 ruby -w -Ilib -Itest -e 'Dir["test/test_*.rb"].sort.each { |f| require File.expand_path(f) }'  # all, as CI does
 ruby examples/smoke.rb           # live, against a running `kosa8 daemon`
 ```

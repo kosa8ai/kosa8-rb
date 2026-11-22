@@ -105,11 +105,49 @@ module Kosa8
     # - snapshot: "snap_..." starts it from a durable snapshot; then give
     #   only env:, name:, labels:, a lifetime or sleep_after_s:.
     #
+    # - lease_s: (60..86400) leases it: deleted lease_s from now unless
+    #   #heartbeat extends it, so a crashed client leaks nothing (not with
+    #   ttl_s: or delete_after:). run_id: labels it kosa8.run=<run_id>.
+    # - idempotency_key: is sent as the Idempotency-Key header (default a new
+    #   UUID) and reused on every retry, so a create retried after a timeout
+    #   or a 5xx makes one sandbox, not two.
+    #
     # Bad arguments raise ArgumentError before any request.
     def create(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil, accept_price: nil,
                size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil, persistent: nil, docker: nil, cpu: nil,
                name: nil, labels: nil, env: nil, secrets: nil, egress: nil, snapshot: nil, wait: true,
-               poll_interval: 1)
+               poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil)
+      body = create_body(template: template, region: region, sleep_after_s: sleep_after_s, ttl_s: ttl_s,
+                         delete_after: delete_after, accept_price: accept_price, size: size, cpus: cpus,
+                         mem_mb: mem_mb, image: image, disk_gb: disk_gb, persistent: persistent, docker: docker,
+                         cpu: cpu, name: name, labels: labels, env: env, secrets: secrets, egress: egress,
+                         snapshot: snapshot)
+      amb = @cloud.run_defaults || {}
+      run_id = amb["run_id"] if run_id.nil?
+      if lease_s.nil? && ttl_s.nil? && delete_after.nil?
+        lease_s = amb["lease_s"]
+      end
+      unless lease_s.nil?
+        raise ArgumentError, "give lease_s or ttl_s/delete_after, not both" unless ttl_s.nil? && delete_after.nil?
+
+        body["lease_s"] = Cloud.check_lease(lease_s)
+      end
+      unless run_id.nil?
+        body["labels"] = (body["labels"] || {}).merge(Cloud::RUN_LABEL => Cloud.check_run_id(run_id))
+        raise ArgumentError, "at most #{Cloud::MAX_LABELS} labels, kosa8.run included" if body["labels"].size > Cloud::MAX_LABELS
+      end
+      Cloud.check_idempotency_key(idempotency_key)
+      r = @cloud.request("POST", "/v1/sandboxes", body, idempotency_key: idempotency_key)
+      box = CloudSandbox.new(@cloud, r["sandbox"])
+      box.wait_running(poll_interval: poll_interval) if wait && box.state == "creating"
+      box
+    end
+
+    # The body of POST /v1/sandboxes for these options (ArgumentError on a bad one).
+    def create_body(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil,
+                    accept_price: nil, size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil,
+                    persistent: nil, docker: nil, cpu: nil, name: nil, labels: nil, env: nil, secrets: nil,
+                    egress: nil, snapshot: nil)
       Cloud.check_lifetime(ttl_s, delete_after)
       Cloud.check_sleep_after(sleep_after_s)
       if !accept_price.nil? && !accept_price.is_a?(Numeric)
@@ -143,9 +181,7 @@ module Kosa8
 
         body["snapshot"] = snapshot.to_s
       end
-      box = CloudSandbox.new(@cloud, @cloud.request("POST", "/v1/sandboxes", body)["sandbox"])
-      box.wait_running(poll_interval: poll_interval) if wait && box.state == "creating"
-      box
+      body
     end
 
     # One page of sandboxes; name: finds one by name, labels: keeps those

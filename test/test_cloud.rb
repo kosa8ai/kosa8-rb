@@ -134,7 +134,8 @@ class CloudTest < Minitest::Test
       [401, { "error" => "unauthorized" }],
       [500, nil]
     ]
-    cloud = Kosa8::Cloud.new(api_key: KEY, env: {}, transport: Stub.new { answers.shift })
+    cloud = Kosa8::Cloud.new(api_key: KEY, env: {}, transport: Stub.new { answers.shift },
+                             retry_policy: Kosa8::RetryPolicy::NONE)
     e = assert_raises(Kosa8::PaymentRequiredError) { cloud.sandboxes.create }
     assert_kind_of Kosa8::ApiError, e
     assert_equal "payment_required", e.code
