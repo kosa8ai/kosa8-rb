@@ -249,7 +249,9 @@ module Kosa8
       message = (msg_body.is_a?(Hash) ? msg_body["error"] : msg_body).to_s
       e = if exec_timeout?(status, code, message, path)
             said = message.empty? ? nil : message
-            ExecTimeoutError.new("#{said || "request failed with HTTP #{status}"} (#{EXEC_HINT})",
+            # Its own timeout_s (exec(..., timeout_s:)) needs no hint about the 90 s limit.
+            hint = message.include?("timeout_s") ? "" : " (#{EXEC_HINT})"
+            ExecTimeoutError.new("#{said || "request failed with HTTP #{status}"}#{hint}",
                                  status: status, daemon_message: said, method: method, path: path,
                                  code: code || "exec_timeout")
           else
@@ -499,17 +501,25 @@ module Kosa8
     # Run a command and wait for it. A String runs through sh -c, an Array is
     # the argv. A sleeping sandbox wakes for it.
     #
-    # Each exec runs in a fresh container: only /workspace persists, so cd,
-    # export and packages installed elsewhere are gone by the next one. kosa8
-    # Cloud stops a buffered exec after 90 s, raised as
-    # Kosa8::ExecTimeoutError; run long work in the background
-    # (nohup sh -c '...' > /workspace/job.log 2>&1 &) and poll it. The request
+    # Only /workspace is sure to persist: an exec may run in a fresh
+    # container (unless the sandbox is persistent), so cd, export and packages
+    # installed elsewhere may be gone by the next one. kosa8 Cloud stops a
+    # buffered exec after 90 s, raised as Kosa8::ExecTimeoutError; run long
+    # work in the background (nohup sh -c '...' > /workspace/job.log 2>&1 &)
+    # and poll it. +timeout_s+ (1 to 90 whole seconds) stops the command in
+    # the sandbox sooner, also as Kosa8::ExecTimeoutError. The request
     # (command and env) is at most 64 KiB (413 too_large).
-    def exec(cmd, image: nil, env: nil)
+    def exec(cmd, image: nil, env: nil, timeout_s: nil)
       argv = cmd.is_a?(String) ? ["sh", "-c", cmd] : cmd.to_a
       body = { "cmd" => argv }
       body["image"] = image unless image.nil?
       body["env"] = env.map { |k, v| "#{k}=#{v}" } if env && !env.empty?
+      unless timeout_s.nil?
+        unless timeout_s.is_a?(Integer) && timeout_s.between?(1, Cloud::EXEC_LIMIT_S)
+          raise ArgumentError, "timeout_s must be a whole number of seconds from 1 to #{Cloud::EXEC_LIMIT_S}"
+        end
+        body["timeout_s"] = timeout_s
+      end
       r = @cloud.request("POST", path("/exec"), body)
       fc, rt = Kosa8.exec_failure(r["exit"])
       fc = r["failure_class"] if r["failure_class"].is_a?(String)

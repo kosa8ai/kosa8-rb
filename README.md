@@ -6,8 +6,8 @@ Method for method it matches [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js)
 ## Quickstart: kosa8 Cloud
 
 ```sh
-gem install kosa8 -v 0.4.0
-# or in a Gemfile: gem "kosa8", "~> 0.5.0"
+gem install kosa8
+# or in a Gemfile: gem "kosa8", "~> 0.5"
 export KOSA8_API_KEY=k8c_live_...   # made in the cloud dashboard
 ```
 
@@ -20,7 +20,7 @@ box = cloud.sandboxes.create(template: "python", ttl_s: 3600)  # deleted automat
 r = box.exec(["python3", "-c", "print(6 * 7)"])
 puts r.exit_code, r.stdout     # 0, 42
 
-box.exec("echo hello > /workspace/hello.txt")  # only /workspace persists between commands
+box.exec("echo hello > /workspace/hello.txt")  # /workspace is kept between commands
 puts box.exec("cat /workspace/hello.txt").stdout
 
 box.files.write("/workspace/app.py", "print('hi')\n")  # needs the host's data plane (see below)
@@ -167,11 +167,15 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
 
 - The `base` template is **Alpine Linux**: `sh` is busybox, and there is no `bash`, `python` or `git`.
   Use `template: "python"` (or another key from `cloud.templates`) for Python, or pass `image:` to `exec`.
-- **Each `exec` runs in a fresh container, and only `/workspace` persists.** `cd`, `export` and anything
-  installed outside `/workspace` (`apk add`, a system `pip install`) are gone by the next command. Install
-  into `/workspace` (for example `pip install --target /workspace/lib ...` with `PYTHONPATH=/workspace/lib`),
-  or chain the steps in one `sh -c`.
-- **A buffered `exec` runs at most 90 seconds** and raises `Kosa8::ExecTimeoutError`. Run long
+- **Only `/workspace` is sure to persist between commands.** A command may run in a fresh container, so
+  `cd`, `export`, processes it leaves running and anything installed outside `/workspace` (`apk add`, a
+  system `pip install`) may be gone by the next command. Install into `/workspace` (for example
+  `pip install --target /workspace/lib ...` with `PYTHONPATH=/workspace/lib`), chain the steps in one
+  `sh -c`, or create with `persistent: true` (one long-lived container) to keep the whole filesystem and
+  background processes; the code interpreter (`run_code`) needs it, and it counts against your plan's
+  persistent-sandbox limit.
+- **A buffered `exec` runs at most 90 seconds** and raises `Kosa8::ExecTimeoutError`.
+  `box.exec(cmd, timeout_s: 30)` stops a command sooner, in the sandbox (1 to 90 whole seconds). Run long
   work in the background and poll it:
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' &")`.
 - A request body (command and env) is at most 64 KiB; a file read or write is at most 8 MiB.
@@ -190,6 +194,28 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
 | `Kosa8::UnsupportedError` (501) | the host has no data plane yet (files, checkpoints, rewind, fork, ports) | use `exec`, or try later |
 
 Every Cloud error is a `Kosa8::ApiError` carrying the server's stable `e.code`, its message and `e.body`.
+
+## The same thing in each language
+
+The five kosa8 SDKs (Python `kosa8`, JS `@kosa8/sdk`, Go `kosa8-go`, Ruby `kosa8`, Java
+`com.kosa8:kosa8`) call the same kosa8 Cloud API, but some names differ by language. The ones
+that catch people switching:
+
+| | Python | JS / TS | Go | Ruby | Java |
+|---|---|---|---|---|---|
+| client | `Kosa8Cloud()` | `new Kosa8Cloud()` | `kosa8.NewCloud(kosa8.CloudOptions{})`, returns `(cloud, err)` | `Kosa8::Cloud.new` | `Kosa8Cloud.builder().build()` |
+| lifetime on create | `ttl_s=3600` | `{ ttlS: 3600 }` | `CloudCreateOptions{TTLSeconds: 3600}` | `ttl_s: 3600` | `new CloudOptions.Create().ttlSeconds(3600)` |
+| persistent sandbox | `persistent=True` | `{ persistent: true }` | `CloudCreateOptions{Persistent: true}` | `persistent: true` | `.persistent(true)` |
+| sandbox id | `box.id` | `box.id` | `box.ID()`, a method (`fmt.Println(box.ID)` prints a func value; `go vet` reports it) | `box.id` | `box.id()` |
+| shell command | `box.exec("ls /")` | `box.exec('ls /')` | `box.ExecShell(ctx, "ls /", nil)` | `box.exec("ls /")` | `box.exec("ls /")` |
+| argv command | `box.exec(["ls", "/"])` | `box.exec(['ls', '/'])` | `box.Exec(ctx, []string{"ls", "/"}, nil)` | `box.exec(["ls", "/"])` | `box.exec(List.of("ls", "/"))` |
+| per-exec timeout | `exec(cmd, timeout_s=30)` | `exec(cmd, { timeoutS: 30 })` | `&kosa8.CloudExecOptions{TimeoutS: 30}` | `exec(cmd, timeout_s: 30)` | `exec(cmd, null, null, 30)` |
+| exit code | `r.exit_code` | `r.exitCode` | `r.ExitCode`, an `*int` (nil when the cloud sent none; `r.OK()` checks for 0) | `r.exit_code` | `r.exitCode()`, an `Integer` (may be null) |
+| files | `box.files.write` / `read_text` / `list` | `box.files.write` / `readText` / `list` | `box.Files().WriteString` / `ReadText` / `List(ctx, "")` | `box.files.write` / `read_text` / `list` | `box.files().write` / `readText` / `list()` |
+| no such sandbox | `Kosa8NotFoundError` | `Kosa8NotFoundError` | `*kosa8.Error` with `Kind` `KindNotFound` (`errors.Is(err, kosa8.ErrNotFound)`) | `Kosa8::NotFoundError` | `Kosa8Exception.NotFoundException` |
+
+In every SDK a non-zero exit is returned in the result, not raised. Only `/workspace` is sure to
+persist between commands, unless the sandbox is persistent.
 
 ## Local daemon
 
