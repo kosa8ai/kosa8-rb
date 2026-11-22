@@ -139,7 +139,8 @@ class CloudTest < Minitest::Test
     e = assert_raises(Kosa8::PaymentRequiredError) { cloud.sandboxes.create }
     assert_kind_of Kosa8::ApiError, e
     assert_equal "payment_required", e.code
-    assert_equal "add a payment method to start running work", e.message
+    assert_equal "add a payment method to start running work", e.daemon_message
+    assert_equal "add a payment method to start running work [HTTP 402 payment_required]", e.message
     assert_equal 402, e.status
     assert_equal "payment_required", e.body["error"], "body is the cloud's own answer"
     e = assert_raises(Kosa8::RateLimitError) { cloud.sandboxes.create }
@@ -147,10 +148,11 @@ class CloudTest < Minitest::Test
     e = assert_raises(Kosa8::NotFoundError) { cloud.sandboxes.get("sbx_x") }
     assert_equal "not_found", e.code
     e = assert_raises(Kosa8::AuthError) { cloud.me }
-    assert_equal "unauthorized", e.message
+    assert_equal "unauthorized", e.daemon_message
+    assert e.message.start_with?("unauthorized [HTTP 401 unauthorized; check KOSA8_API_KEY"), e.message
     e = assert_raises(Kosa8::ApiError) { cloud.me }
     assert_nil e.code
-    assert_equal "request failed with HTTP 500", e.message
+    assert_equal "request failed with HTTP 500 [HTTP 500; retryable]", e.message
   end
 
   def test_unreachable

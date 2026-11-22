@@ -63,6 +63,11 @@ module Kosa8
     MAX_FORK = 1000
     # The limit kosa8 Cloud puts on a buffered exec, in seconds (504 exec_timeout past it).
     EXEC_LIMIT_S = 90
+    # Where a person makes and revokes API keys.
+    KEYS_URL = "https://app.kosa8.com/app#keys"
+    # Added to a 401 from the API: the key is the usual cause.
+    AUTH_HINT = "check KOSA8_API_KEY (or api_key:) is a current key; make a new one at #{KEYS_URL}"
+
     EXEC_HINT = "a buffered exec is stopped after #{EXEC_LIMIT_S} s; run long work in the background, " \
                 "writing to /workspace, and poll it"
 
@@ -88,9 +93,12 @@ module Kosa8
     def initialize(api_key: nil, base_url: nil, env: ENV, timeout: 120, transport: nil, retry_policy: nil,
                    sleeper: nil)
       key = (api_key.nil? ? env["KOSA8_API_KEY"].to_s : api_key.to_s).strip
-      raise Error, "no kosa8 Cloud API key: pass api_key: or set KOSA8_API_KEY" if key.empty?
+      if key.empty?
+        raise Error, "no kosa8 Cloud API key: set KOSA8_API_KEY or pass api_key:; make one at #{KEYS_URL}"
+      end
       unless key.start_with?(KEY_PREFIX) || key.start_with?(TOKEN_PREFIX)
-        raise Error, "a kosa8 Cloud API key starts with #{KEY_PREFIX} (a capability token with #{TOKEN_PREFIX})"
+        raise Error, "a kosa8 Cloud API key starts with #{KEY_PREFIX} (a capability token with #{TOKEN_PREFIX}); " \
+                     "check KOSA8_API_KEY or api_key:, or make a key at #{KEYS_URL}"
       end
 
       @key = key
@@ -206,10 +214,12 @@ module Kosa8
           raise ExecTimeoutError.new("kosa8 Cloud did not answer within #{@timeout} s (#{EXEC_HINT})",
                                      method: method, path: path, code: "exec_timeout")
         end
-        raise TimeoutError.new("kosa8 Cloud did not answer within #{@timeout} s (#{e.message})",
+        raise TimeoutError.new("kosa8 Cloud did not answer #{method} #{path.split("?", 2)[0]} within #{@timeout} s " \
+                               "(#{e.message}); try again, or give Kosa8::Cloud.new a longer timeout:",
                                method: method, path: path)
       rescue SystemCallError, IOError, SocketError, OpenSSL::SSL::SSLError => e
-        raise ConnectionError.new("could not reach kosa8 Cloud at #{@base_url}: #{e.message}",
+        raise ConnectionError.new("could not reach kosa8 Cloud at #{@base_url}: #{e.message}; " \
+                                  "check the network connection and KOSA8_CLOUD_URL (or base_url:), then try again",
                                   method: method, path: path)
       end
       return content.to_s.b if raw && status.to_i < 400
@@ -251,7 +261,38 @@ module Kosa8
         ra = body["retry_after_s"] # e.g. 409 idempotency_in_progress, 503 no_capacity
         e.retry_after = ra.to_f if ra.is_a?(Numeric) && ra.positive?
       end
+      e.request_id = header(headers, "x-request-id") || header(headers, "cf-ray")
+      e.detail = detail(e, message)
       e
+    end
+
+    # The context after the sentence of an API error:
+    # "[HTTP 503 no_capacity; retry in 10 s; request 8e1a-SJC]", with the
+    # place to pay for a 402 and what to check for a 401.
+    def self.detail(e, sentence)
+      parts = ["HTTP #{e.status}#{e.code ? " #{e.code}" : ""}"]
+      if e.retry_after
+        n = e.retry_after
+        parts << "retry in #{n == n.round ? n.round : n.round(1)} s"
+      elsif e.retryable?
+        parts << "retryable"
+      end
+      up = Kosa8.body_str(e.body, "upgrade_url")
+      parts << "upgrade: #{up}" if e.status == 402 && up && !sentence.include?(up)
+      parts << AUTH_HINT if e.status == 401
+      parts << "request #{e.request_id}" if e.request_id
+      "[#{parts.join("; ")}]"
+    end
+
+    # A response header's value by case-insensitive name, or nil.
+    def self.header(headers, name)
+      return nil unless headers.respond_to?(:each)
+
+      v = nil
+      headers.each { |k, val| v = val if k.to_s.casecmp(name).zero? }
+      v = v.first if v.is_a?(Array)
+      s = v.to_s.strip
+      s.empty? ? nil : s
     end
 
     def self.exec_path?(path)
