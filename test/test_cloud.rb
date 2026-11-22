@@ -92,6 +92,25 @@ class CloudTest < Minitest::Test
     assert_nil stub.seen[3][:body], "sleep sends no body"
   end
 
+  def test_exec_timeout_s
+    stub = Stub.new do |s|
+      if s[:body]["timeout_s"] == 2
+        [504, { "error" => "exec_timeout", "message" => "the command ran longer than its timeout_s of 2 s and was stopped" }]
+      else
+        [200, { "exit" => 0, "stdout" => "", "stderr" => "" }]
+      end
+    end
+    cloud = Kosa8::Cloud.new(api_key: KEY, base_url: "https://cp.test", env: {}, transport: stub)
+    box = Kosa8::CloudSandbox.new(cloud, sbx)
+    box.exec("true", timeout_s: 30)
+    assert_equal({ "cmd" => ["sh", "-c", "true"], "timeout_s" => 30 }, stub.seen[0][:body])
+    e = assert_raises(Kosa8::ExecTimeoutError) { box.exec("sleep 9", timeout_s: 2) }
+    refute_match(/background/, e.message)
+    n = stub.seen.size
+    [0, 91, 1.5, "5"].each { |bad| assert_raises(ArgumentError) { box.exec("true", timeout_s: bad) } }
+    assert_equal n, stub.seen.size, "a bad timeout_s is not sent"
+  end
+
   def test_functions
     stub = Stub.new do |s|
       case s[:url]
