@@ -16,7 +16,7 @@ module Kosa8
     # not the policy, so the rollout must not train as reward 0. "error" is
     # your own solve raising (a harness bug). Add "timeout" to mask timeouts.
     DEFAULT_MASK = %w[infra quota error].freeze
-    MASKABLE = %w[ok exit_nonzero timeout infra quota client error].freeze
+    MASKABLE = %w[ok exit_nonzero timeout oom infra quota client error].freeze
     STDOUT_TAIL = 64 * 1024
     ROW_STDOUT_TAIL = 4096
     META_MAX = 8192

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Failure class `oom`: exit 137 with the guest kernel's OOM count raised (kosa8 Cloud reports it on exec and grade; a grade killed for memory has no reward). It can be added to a rollout mask.
+
 ## 0.5.0 — unreleased
 
 RL training and fan-out on kosa8 Cloud (the API of kosa8 Cloud's RL release):
