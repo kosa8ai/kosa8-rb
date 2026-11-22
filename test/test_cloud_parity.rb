@@ -57,7 +57,7 @@ class CloudParityTest < Minitest::Test
   end
 
   def test_version
-    assert_equal "0.5.3", Kosa8::VERSION
+    assert_equal "0.6.0", Kosa8::VERSION
   end
 
   def test_create_with_lifetime_and_price

@@ -10,8 +10,17 @@ require "uri"
 # Kosa8::UnsupportedError; Cloud#capabilities says what the org can do.
 module Kosa8
   class Cloud
-    # The sizes a sized create takes: vCPU x GiB.
+    # The standard sizes (vCPU x GiB), which every sized call takes
+    # (sandboxes, org templates, pipelines).
     SIZES = %w[2x4 4x8 8x16 16x32].freeze
+    # Small sizes, for fleets of mostly idle sandboxes (RL rollouts, evals):
+    # a fraction of a vCPU reserved, bursting while the host has idle CPU.
+    # Only a sandbox create takes them, and only hosts that run them (else
+    # 501 not_available, Kosa8::UnsupportedError). As cpus:/mem_mb:
+    # 0.25/512, 0.5/1024, 1/2048.
+    SMALL_SIZES = %w[0.25x0.5 0.5x1 1x2].freeze
+    # Every size a sandbox create takes.
+    SANDBOX_SIZES = (SMALL_SIZES + SIZES).freeze
     ENV_NAME = /\A[A-Za-z_][A-Za-z0-9_]*\z/.freeze
     SANDBOX_NAME = /\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/.freeze
     SNAPSHOT_ID = /\Asnap_[A-Za-z0-9]{8,40}\z/.freeze
@@ -91,8 +100,9 @@ module Kosa8
     # Start a sandbox. Besides template:, region:, sleep_after_s:, ttl_s:,
     # delete_after: and accept_price:
     #
-    # - size: "2x4", "4x8", "8x16" or "16x32" (vCPU x GiB), or cpus: and
-    #   mem_mb:; image: an OCI image (such as
+    # - size: "2x4", "4x8", "8x16" or "16x32" (vCPU x GiB), a small size
+    #   "0.25x0.5", "0.5x1" or "1x2" (Cloud::SMALL_SIZES), or cpus: and
+    #   mem_mb: (cpus: 0.25, mem_mb: 512 is the smallest); image: an OCI image (such as
     #   "kosa8-template/universal-24.04-20261115.2"); disk_gb: 8..200. Any of
     #   these boots the sandbox cold at that size: create waits for it to
     #   run unless wait: false (then call #wait_running).
@@ -102,6 +112,9 @@ module Kosa8
     # - name:, labels: (up to 16), env: (given to every command; values are
     #   never logged or returned), secrets: (names from cloud.secrets),
     #   egress: ({internet:, allow:, deny:, presets:}).
+    # - record: true saves its desktop as an MP4 to cloud.recordings when
+    #   it is deleted; ai_gateway: true points OPENAI_BASE_URL,
+    #   ANTHROPIC_BASE_URL and the like at the org's AI gateway (cloud.ai).
     # - snapshot: "snap_..." starts it from a durable snapshot; then give
     #   only env:, name:, labels:, a lifetime or sleep_after_s:.
     #
@@ -116,12 +129,12 @@ module Kosa8
     def create(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil, accept_price: nil,
                size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil, persistent: nil, docker: nil, cpu: nil,
                name: nil, labels: nil, env: nil, secrets: nil, egress: nil, snapshot: nil, wait: true,
-               poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil)
+               poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil, record: nil, ai_gateway: nil)
       body = create_body(template: template, region: region, sleep_after_s: sleep_after_s, ttl_s: ttl_s,
                          delete_after: delete_after, accept_price: accept_price, size: size, cpus: cpus,
                          mem_mb: mem_mb, image: image, disk_gb: disk_gb, persistent: persistent, docker: docker,
                          cpu: cpu, name: name, labels: labels, env: env, secrets: secrets, egress: egress,
-                         snapshot: snapshot)
+                         snapshot: snapshot, record: record, ai_gateway: ai_gateway)
       amb = @cloud.run_defaults || {}
       run_id = amb["run_id"] if run_id.nil?
       if lease_s.nil? && ttl_s.nil? && delete_after.nil?
@@ -147,7 +160,7 @@ module Kosa8
     def create_body(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil,
                     accept_price: nil, size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil,
                     persistent: nil, docker: nil, cpu: nil, name: nil, labels: nil, env: nil, secrets: nil,
-                    egress: nil, snapshot: nil)
+                    egress: nil, snapshot: nil, record: nil, ai_gateway: nil)
       Cloud.check_lifetime(ttl_s, delete_after)
       Cloud.check_sleep_after(sleep_after_s)
       if !accept_price.nil? && !accept_price.is_a?(Numeric)
@@ -171,6 +184,8 @@ module Kosa8
       body["env"] = Cloud.check_env(env) unless env.nil?
       body["secrets"] = secrets.to_a.map { |n| Cloud.check_secret_name(n) } unless secrets.nil?
       body["egress"] = Cloud.egress_body(egress) unless egress.nil?
+      body["record"] = record == true unless record.nil?
+      body["ai_gateway"] = ai_gateway == true unless ai_gateway.nil?
       unless snapshot.nil?
         raise ArgumentError, "snapshot: is a snapshot id (snap_...)" unless Cloud::SNAPSHOT_ID.match?(snapshot.to_s)
 
@@ -212,7 +227,9 @@ module Kosa8
 
     def sized(body, size, cpus, mem_mb, image, disk_gb, persistent, docker, cpu)
       unless size.nil?
-        raise ArgumentError, "size must be one of #{Cloud::SIZES.join(', ')}" unless Cloud::SIZES.include?(size.to_s)
+        unless Cloud::SANDBOX_SIZES.include?(size.to_s)
+          raise ArgumentError, "size must be one of #{Cloud::SANDBOX_SIZES.join(', ')}"
+        end
 
         body["size"] = size.to_s
       end
@@ -220,8 +237,12 @@ module Kosa8
 
       unless cpus.nil?
         raise ArgumentError, "give size: or cpus: and mem_mb:, not both" unless size.nil?
+        unless cpus.is_a?(Numeric) && cpus.positive?
+          raise ArgumentError, "cpus must be a positive number (0.25, 0.5, 1, 2, 4, 8 or 16)"
+        end
 
-        body["cpus"] = Integer(cpus)
+        # 0.25 and 0.5 are sent as they are; a whole number as an Integer.
+        body["cpus"] = cpus == cpus.to_i ? cpus.to_i : cpus.to_f
         body["mem_mb"] = Integer(mem_mb)
       end
       body["image"] = image.to_s unless image.nil?
@@ -274,7 +295,17 @@ module Kosa8
     def background_exec(exec_id)
       raise ArgumentError, "background_exec needs an exec id (bg_...)" if exec_id.nil? || exec_id.to_s.empty?
 
-      @cloud.request("GET", path("/exec/#{Kosa8.enc(exec_id)}"))["exec"]
+      @cloud.request("GET", "/v1/sandboxes/#{Kosa8.enc(id)}/exec/#{Kosa8.enc(exec_id)}")["exec"]
+    end
+
+    # Stop a background command and what it started (SIGTERM, then SIGKILL
+    # after 5 s); returns the command as it now is.
+    def stop_background(exec_id)
+      exec_id = exec_id["id"] if exec_id.is_a?(Hash)
+      raise ArgumentError, "stop_background needs an exec id (bg_...)" if exec_id.nil? || exec_id.to_s.empty?
+
+      r = @cloud.request("POST", "/v1/sandboxes/#{Kosa8.enc(id)}/exec/#{Kosa8.enc(exec_id)}/stop", {})
+      r.is_a?(Hash) ? (r["exec"] || r) : {}
     end
 
     # Poll a background command until it exits; returns it.
@@ -370,7 +401,7 @@ module Kosa8
     end
 
     def delete_code_context(name)
-      @cloud.request("DELETE", path("/code/contexts/#{Kosa8.enc(name)}"))
+      @cloud.request("DELETE", "/v1/sandboxes/#{Kosa8.enc(id)}/code/contexts/#{Kosa8.enc(name)}")
       nil
     end
 
@@ -462,7 +493,7 @@ module Kosa8
     end
 
     def delete(port)
-      @cloud.request("DELETE", @sandbox.path("/previews/#{check(port)}"))
+      @cloud.request("DELETE", "/v1/sandboxes/#{Kosa8.enc(@sandbox.id)}/previews/#{check(port)}")
       nil
     end
 
@@ -503,7 +534,7 @@ module Kosa8
     end
 
     def delete(id)
-      @cloud.request("DELETE", @sandbox.path("/schedules/#{Kosa8.enc(id)}"))
+      @cloud.request("DELETE", "/v1/sandboxes/#{Kosa8.enc(@sandbox.id)}/schedules/#{Kosa8.enc(id)}")
       nil
     end
 
@@ -657,7 +688,8 @@ module Kosa8
 
     # One artifact's bytes (a .tar.gz), as a binary String.
     def download_artifact(id, job, idx)
-      @cloud.request_bytes("GET", run_path(id, "/artifacts/#{Kosa8.enc(job)}/#{Integer(idx)}"), raw: true)
+      @cloud.request_bytes("GET", "/v1/pipelines/runs/#{Kosa8.enc(id)}/artifacts/#{Kosa8.enc(job)}/#{Integer(idx)}",
+                           raw: true)
     end
 
     # A webhook URL for a repository's pushes and pull requests, and with
