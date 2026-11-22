@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.3
 
 - `CloudSandbox#exec(cmd, timeout_s:)`: the API's exec `timeout_s` (1 to 90 whole seconds) stops the command in the sandbox when it runs that long and raises `Kosa8::ExecTimeoutError` (without the hint about the 90 s buffered limit). Python, JS, Go and Java have the same option. Any other value is an `ArgumentError` before the call.
 - README: `gem install kosa8` (it said `-v 0.4.0`) and `gem "kosa8", "~> 0.5"`; what persists between commands (only `/workspace`, unless the sandbox is persistent) matches the server; a "same thing in each language" table for the five SDKs.
