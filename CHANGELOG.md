@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2 — unreleased
+
+- **Actionable API errors:** an error from kosa8 Cloud now reads as the server's sentence followed by its
+  context, e.g. `no capacity: fork fewer or retry in 2 s [HTTP 503 no_capacity; retry in 10 s; request a5e7…-BOS]`.
+  A 402 adds its `upgrade_url` (when the sentence does not already have it) and a 401 says to check
+  `KOSA8_API_KEY` and where to make a key. The bare sentence stays in `daemon_message`.
+- `Kosa8::Error#request_id`: the failed request's `X-Request-Id`, else Cloudflare's `cf-ray` (quote it to
+  support). `#retry_after_s` is `#retry_after` under the API's name.
+- Client-side errors say what to do next: a missing or malformed key points at `KOSA8_API_KEY` and
+  https://app.kosa8.com/app#keys; a timeout names the call and suggests a longer `timeout:`; a connection
+  failure says to check the network and `KOSA8_CLOUD_URL`.
+
 ## 0.5.1
 
 - Failure class `oom`: exit 137 with the guest kernel's OOM count raised (kosa8 Cloud reports it on exec and grade; a grade killed for memory has no reward). It can be added to a rollout mask.

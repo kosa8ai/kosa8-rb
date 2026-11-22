@@ -11,6 +11,13 @@ module Kosa8
     # Seconds the server asked to wait before trying again (Retry-After, or
     # the body's retry_after_s), when it said.
     attr_accessor :retry_after
+    # The id of the request that failed (the X-Request-Id header, else
+    # Cloudflare's cf-ray): quote it when you ask kosa8 support. nil when the
+    # answer had neither, and for errors with no answer.
+    attr_accessor :request_id
+    # Context added after the server's sentence in #message (kosa8 Cloud
+    # answers: "[HTTP 503 no_capacity; retry in 10 s; request ...]").
+    attr_accessor :detail # :nodoc:
 
     def initialize(message = nil, status: nil, daemon_message: nil, remediation: nil, method: nil, path: nil, body: nil,
                    code: nil)
@@ -22,6 +29,21 @@ module Kosa8
       @path = path
       @body = body
       @code = code
+    end
+
+    # The message: the server's own sentence (or the SDK's), followed for a
+    # kosa8 Cloud answer by its status, code, wait and request id, so a log
+    # line alone says what happened and what to do. The bare sentence is
+    # daemon_message.
+    def to_s
+      d = @detail
+      d.nil? || d.empty? ? super : "#{super} #{d}"
+    end
+
+    # retry_after under the API's own name: seconds to wait before trying
+    # again, or nil.
+    def retry_after_s
+      retry_after
     end
 
     # Whose fault it was: "ok", "exit_nonzero", "timeout", "infra", "quota",

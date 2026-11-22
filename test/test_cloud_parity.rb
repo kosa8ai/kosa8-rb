@@ -220,7 +220,7 @@ class CloudParityTest < Minitest::Test
   def test_file_read_error_is_typed
     stub = Stub.new { [404, { "error" => "not_found", "message" => "no such file" }] }
     e = assert_raises(Kosa8::NotFoundError) { box(stub).files.read("/workspace/nope") }
-    assert_equal "no such file", e.message
+    assert_equal "no such file", e.daemon_message
   end
 
   def test_checkpoints_rewind_fork_ports
@@ -300,7 +300,7 @@ class CloudParityTest < Minitest::Test
     assert_equal "spending_cap_reached", e.code
     assert_equal "https://app.kosa8.com/#billing", e.upgrade_url
     assert_equal "Tell your person to raise the cap.", e.agent_message
-    assert_equal "the spending cap is reached", e.message
+    assert_equal "the spending cap is reached", e.daemon_message
     e = assert_raises(Kosa8::PaymentRequiredError) do
       cloud(Stub.new { [402, { "error" => "payment_required", "message" => "add a card" }] }).sandboxes.create
     end
@@ -312,7 +312,7 @@ class CloudParityTest < Minitest::Test
     stub = Stub.new { [423, { "error" => "org_frozen", "message" => "this organization is frozen" }] }
     e = assert_raises(Kosa8::OrgFrozenError) { cloud(stub).sandboxes.create }
     assert_kind_of Kosa8::ApiError, e
-    assert_equal ["org_frozen", 423, "this organization is frozen"], [e.code, e.status, e.message]
+    assert_equal ["org_frozen", 423, "this organization is frozen"], [e.code, e.status, e.daemon_message]
   end
 
   def test_rate_limit_retry_after
