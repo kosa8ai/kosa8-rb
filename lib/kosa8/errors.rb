@@ -69,9 +69,9 @@ module Kosa8
   # admin unfreezes it; retrying does not help.
   class OrgFrozenError < ApiError; end
 
-  # A kosa8 Cloud exec ran past the API's limit for a buffered command. Today a
-  # buffered exec is cut off after about 30 s (HTTP 502 host_failed "timed out";
-  # later servers answer 504 exec_timeout). Run long work in the background,
+  # A kosa8 Cloud exec ran past the API's limit for a buffered command. A
+  # buffered exec runs at most 90 s, then the API stops it and answers 504
+  # exec_timeout (older servers: HTTP 502 host_failed "timed out"). Run long work in the background,
   # writing to /workspace, and poll it:
   #
   #   box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1' &")

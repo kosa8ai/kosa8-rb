@@ -330,7 +330,7 @@ class CloudParityTest < Minitest::Test
 
   def test_exec_timeout
     answers = [
-      [504, { "error" => "exec_timeout", "message" => "the command ran past 30 s" }],
+      [504, { "error" => "exec_timeout", "message" => "the command ran past 90 s" }],
       [502, { "error" => "exec_timeout", "message" => "cut off" }],
       [502, { "error" => "host_failed", "message" => "exec failed on the host: request Timed Out" }],
       [504, nil]
@@ -339,8 +339,8 @@ class CloudParityTest < Minitest::Test
     e = assert_raises(Kosa8::ExecTimeoutError) { b.exec("sleep 60") }
     assert_kind_of Kosa8::ApiError, e
     assert_equal ["exec_timeout", 504], [e.code, e.status]
-    assert_match(/the command ran past 30 s/, e.message)
-    assert_match(/30 s.*background/, e.message)
+    assert_match(/the command ran past 90 s/, e.message)
+    assert_match(/stopped after 90 s.*background/, e.message)
     assert_raises(Kosa8::ExecTimeoutError) { b.exec("sleep 60") }
     e = assert_raises(Kosa8::ExecTimeoutError) { b.exec("sleep 60") }
     assert_equal "host_failed", e.code

@@ -255,7 +255,7 @@ module Kosa8
       raise Error, "sandbox #{id} is #{state}, not running#{@info['last_error'] ? ": #{@info['last_error']}" : ''}"
     end
 
-    # Start a command that keeps running after this returns (no 30 s
+    # Start a command that keeps running after this returns (no 90 s
     # limit). Returns the background command (a Hash: "id" (bg_...),
     # "state", "pid", "output_path", ...); poll it with #background_exec or
     # #wait_background.

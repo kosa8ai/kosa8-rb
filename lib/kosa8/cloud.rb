@@ -46,7 +46,7 @@ module Kosa8
   # +code+ (for example payment_required, quota_exceeded). Standard library only.
   #
   # Each exec runs in a fresh container and only /workspace persists; a
-  # buffered exec is cut off after about 30 s (ExecTimeoutError), and a request
+  # buffered exec runs at most 90 s (ExecTimeoutError), and a request
   # body is at most 64 KiB.
   class Cloud
     DEFAULT_URL = "https://api.kosa8.com"
@@ -61,9 +61,9 @@ module Kosa8
     MAX_SLEEP_AFTER_S = 604_800
     # A fork makes from 1 to 1000 copies in one call.
     MAX_FORK = 1000
-    # The limit kosa8 Cloud puts on a buffered exec today, in seconds.
-    EXEC_LIMIT_S = 30
-    EXEC_HINT = "a buffered exec is limited to about #{EXEC_LIMIT_S} s; run long work in the background, " \
+    # The limit kosa8 Cloud puts on a buffered exec, in seconds (504 exec_timeout past it).
+    EXEC_LIMIT_S = 90
+    EXEC_HINT = "a buffered exec is stopped after #{EXEC_LIMIT_S} s; run long work in the background, " \
                 "writing to /workspace, and poll it"
 
     attr_reader :base_url, :timeout, :sandboxes, :functions
@@ -460,7 +460,7 @@ module Kosa8
     #
     # Each exec runs in a fresh container: only /workspace persists, so cd,
     # export and packages installed elsewhere are gone by the next one. kosa8
-    # Cloud cuts a buffered exec off after about 30 s, raised as
+    # Cloud stops a buffered exec after 90 s, raised as
     # Kosa8::ExecTimeoutError; run long work in the background
     # (nohup sh -c '...' > /workspace/job.log 2>&1 &) and poll it. The request
     # (command and env) is at most 64 KiB (413 too_large).
