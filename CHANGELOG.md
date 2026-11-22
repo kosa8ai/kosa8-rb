@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.2 — unreleased
+## 0.5.2
 
 - **Actionable API errors:** an error from kosa8 Cloud now reads as the server's sentence followed by its
   context, e.g. `no capacity: fork fewer or retry in 2 s [HTTP 503 no_capacity; retry in 10 s; request a5e7…-BOS]`.
