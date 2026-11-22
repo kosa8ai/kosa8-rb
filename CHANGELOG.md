@@ -35,7 +35,9 @@ RL training and fan-out on kosa8 Cloud (the API of kosa8 Cloud's RL release):
 - `Cloud::MAX_FORK` is now 1000. Requests that used to fail at once on a 5xx (reads, deletes) are
   now retried; pass `retry_policy: Kosa8::RetryPolicy::NONE` for the old behaviour.
 
-Also in 0.5.0, the rest of the kosa8 Cloud API:
+## 0.4.0 — 2026-11-15
+
+The rest of the kosa8 Cloud API:
 
 - **Sized and Docker creates**: `create` takes `size:`, `cpus:`/`mem_mb:`, `image:`, `disk_gb:`,
   `persistent:`, `docker:`, `cpu:`, `name:`, `labels:`, `env:`, `secrets:`, `egress:`,
@@ -49,8 +51,6 @@ Also in 0.5.0, the rest of the kosa8 Cloud API:
   `artifacts`, `download_artifact`, `create_hook`, `hooks`, `delete_hook`.
 - Every Cloud request sends `User-Agent: kosa8-ruby/<version>` (api.kosa8.com's edge refuses some
   default library user agents).
-
-## 0.4.0 — 2026-11-15
 
 kosa8 Cloud parity with the Python SDK. The default address stays `https://api.kosa8.com` (0.3.0 defaulted to `api.kosa8.cloud`; do not use 0.3.0).
 
