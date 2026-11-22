@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.0 - 2026-11-22
+
+The Ruby SDK now covers what the Python and JS SDKs do (no longer "core tier" only):
+
+- **Browsers:** `cloud.browsers` (`create`, `list`, `info`, `get`, `delete`), `cloud.browser { |b| ... }`
+  (closed when the block ends), `CloudBrowser#page`, `goto`, `screenshot`, `close`, `refresh`, `cdp_url`
+  (never shown by `inspect`) and `cdp_path` (GET /v1/browsers/{id}/cdp).
+- **AI gateway:** `cloud.ai` (`keys`, `set_key`, `delete_key`, `settings`, `update_settings`, `usage`),
+  `gateway_url(provider)` (`.../v1/ai/gw/{provider}` for a provider's own client) and `call(provider,
+  path, body)`. `sandboxes.create(ai_gateway: true)` and `record: true`.
+- **Hosted jobs:** `cloud.jobs` (`submit` with an Idempotency-Key, `estimate`, `get`, `list`, `cancel`,
+  `wait`); tasks as an Array or JSONL, files base64-encoded for you.
+- **Benchmarks:** `cloud.benchmarks` (`list`, `get`, `instances`, `instance`, `prepare`).
+- **RL:** `cloud.rl_compare(*ids)` and `cloud.rl_alerts` (`list`, `create`, `update`, `delete`).
+- **Org:** `usage_insights`, `pricing`, `limits`, `request_limit`, `lineage`, `checkpoints`, `images`,
+  `org_egress`, `set_org_egress`, `preview_domains`, `attack_scorecards`; `cloud.audit` (`list`, `each`,
+  `verify`, `export`), `cloud.api_keys` (`list`, `create`, `rotate`, `revoke`), `cloud.webhooks` (`list`,
+  `create`, `delete`, `deliveries`, `test`), `cloud.recordings` (`list`, `link`, `delete`), `cloud.burst`
+  (`get`, `activate`), `cloud.functions.invocations(name)`.
+- **Per sandbox:** `stop_background(exec_id)`, `embeds` (`create`, `list`, `revoke`), `recordings`,
+  `previews.domains(port)` (`add`, `list`, `get`, `remove`).
+- **Small sizes:** `create(size: "0.25x0.5" | "0.5x1" | "1x2")` or `cpus: 0.25, mem_mb: 512`
+  (`Kosa8::Cloud::SMALL_SIZES`); `cpus:` takes fractions (it was `Integer(cpus)`).
+- **Retries:** every request is retried (backoff with full jitter, bounded by the policy's attempts,
+  at least the Retry-After header or the body's `retry_after` / `retry_after_s`) on 503
+  `database_busy`, 409 `template_building` and 429, POSTs included, since the server refused them before
+  running anything. POST /v1/jobs and rollout records now carry an Idempotency-Key, so they are retried
+  on infra failures too. `retryable: false` is never retried. `Kosa8.failure_of` follows the server's
+  rules for `database_busy`, `template_building`, `idempotency_in_progress` and `invalid_*` codes.
+- Overflow capacity (Cloudflare) sandboxes answer fork, checkpoint, rewind and sleep with 501
+  `not_available`; documented, raised as `Kosa8::UnsupportedError`, never retried.
+- README: `gem "kosa8", "~> 0.6"`; one persistence sentence for all SDKs (each exec is a fresh process;
+  files in /workspace persist for the sandbox's life; installed packages need `persistent: true`); the
+  stale "no sandbox labels" line removed.
+
 ## 0.5.3
 
 - `CloudSandbox#exec(cmd, timeout_s:)`: the API's exec `timeout_s` (1 to 90 whole seconds) stops the command in the sandbox when it runs that long and raises `Kosa8::ExecTimeoutError` (without the hint about the 90 s buffered limit). Python, JS, Go and Java have the same option. Any other value is an `ArgumentError` before the call.

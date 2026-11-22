@@ -45,9 +45,10 @@ module Kosa8
   # Errors are the SDK's usual typed errors; each carries the cloud's stable
   # +code+ (for example payment_required, quota_exceeded). Standard library only.
   #
-  # Each exec runs in a fresh container and only /workspace persists; a
-  # buffered exec runs at most 90 s (ExecTimeoutError), and a request
-  # body is at most 64 KiB.
+  # Each exec is a fresh process; files in /workspace persist for the
+  # sandbox's life; installed packages need persistent: true. A buffered
+  # exec runs at most 90 s (ExecTimeoutError), and a request body is at
+  # most 64 KiB.
   class Cloud
     DEFAULT_URL = "https://api.kosa8.com"
     KEY_PREFIX = "k8c_live_"
@@ -86,9 +87,12 @@ module Kosa8
     # retry_policy: (default RetryPolicy.new: 3 tries, backoff with full
     # jitter) is applied where trying again is safe: reads, PUTs, deletes,
     # heartbeats and drains on infra failures; the calls that make sandboxes
-    # (create, batch, fork, grade), which carry an Idempotency-Key reused on
-    # every retry; and any request answered 429, waiting at least its
-    # Retry-After. RetryPolicy::NONE turns it off. sleeper: replaces
+    # (create, batch, fork, grade), job submits and rollout records, which
+    # carry an Idempotency-Key reused on every retry; and any request the
+    # server refused before running it (429, 503 database_busy, 409
+    # template_building), waiting at least its Retry-After (or the body's
+    # retry_after / retry_after_s). An answer with retryable: false is never
+    # retried. RetryPolicy::NONE turns it off. sleeper: replaces
     # Kernel#sleep for those waits (tests).
     def initialize(api_key: nil, base_url: nil, env: ENV, timeout: 120, transport: nil, retry_policy: nil,
                    sleeper: nil)
@@ -154,17 +158,29 @@ module Kosa8
       perform(method, path, nil, data, raw, nil, retry_policy)
     end
 
-    # Methods safe to send twice. Other POSTs are retried only on 429 (refused
-    # before anything was done), unless they carry an Idempotency-Key.
+    # Methods safe to send twice. Other POSTs are retried only when the
+    # server refused them before doing anything (PRE_EXECUTION_CODES, any
+    # 429), unless they carry an Idempotency-Key.
     IDEMPOTENT_METHODS = %w[GET HEAD PUT DELETE].freeze
     IDEMPOTENT_POSTS = %w[/v1/sandboxes/heartbeat /v1/sandboxes/drain].freeze
+    # Refusals made before the request ran, so any request may be sent again:
+    # 503 database_busy (the API's database was overloaded) and 409
+    # template_building (the environment is still being built). Both carry
+    # retryable: true and when to try again (retry_after / Retry-After).
+    PRE_EXECUTION_CODES = %w[database_busy template_building].freeze
     # The POSTs kosa8 Cloud keeps an Idempotency-Key for (24 hours).
-    KEYED_POSTS = %r{\A/v1/sandboxes(/batch|/[A-Za-z0-9_%]{1,64}/(fork|grade))?\z}.freeze
+    KEYED_POSTS = %r{\A/v1/(sandboxes(/batch|/[A-Za-z0-9_%]{1,64}/(fork|grade))?|jobs|rl/runs/[A-Za-z0-9_%]{1,64}/rollouts)\z}.freeze
     IDEMPOTENCY_KEY = /\A[\x21-\x7e]{1,255}\z/.freeze
 
     # Whether kosa8 Cloud honours an Idempotency-Key on this call.
     def self.keyed?(method, path)
       method == "POST" && KEYED_POSTS.match?(path.to_s.split("?", 2)[0])
+    end
+
+    # Whether +e+ is a refusal made before the request ran (any 429, 503
+    # database_busy, 409 template_building), so even a POST may be resent.
+    def self.pre_execution?(e)
+      e.is_a?(Error) && (e.status == 429 || PRE_EXECUTION_CODES.include?(e.code))
     end
 
     def self.check_idempotency_key(key)
@@ -187,7 +203,7 @@ module Kosa8
         begin
           return perform_once(method, path, body, data, raw, extra)
         rescue Error => e
-          raise unless policy.retry?(e, attempt) && (safe || e.status == 429)
+          raise unless policy.retry?(e, attempt) && (safe || Cloud.pre_execution?(e))
 
           @sleeper.call(policy.delay(e, attempt))
           attempt += 1
@@ -260,7 +276,10 @@ module Kosa8
       e.instance_variable_set(:@body, body)
       e.retry_after = retry_after(headers)
       if e.retry_after.nil? && body.is_a?(Hash)
-        ra = body["retry_after_s"] # e.g. 409 idempotency_in_progress, 503 no_capacity
+        # e.g. 409 idempotency_in_progress, 503 no_capacity (retry_after_s),
+        # 503 database_busy (retry_after too).
+        ra = body["retry_after_s"]
+        ra = body["retry_after"] unless ra.is_a?(Numeric) && ra.positive?
         e.retry_after = ra.to_f if ra.is_a?(Numeric) && ra.positive?
       end
       e.request_id = header(headers, "x-request-id") || header(headers, "cf-ray")
@@ -478,6 +497,11 @@ module Kosa8
   # data plane. On hosts without it the API answers 501 (not_available /
   # not_supported), raised as Kosa8::UnsupportedError; not every kosa8 Cloud
   # host has it yet.
+  #
+  # A sandbox kosa8 placed on its overflow capacity (Cloudflare) has no
+  # fork, checkpoint, rewind or sleep: those answer 501 not_available, raised
+  # as Kosa8::UnsupportedError with the server's sentence. The SDK does not
+  # retry or imitate them.
   class CloudSandbox
     attr_reader :info
 

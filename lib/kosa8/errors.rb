@@ -29,6 +29,9 @@ module Kosa8
       @path = path
       @body = body
       @code = code
+      @detail = nil
+      @retry_after = nil
+      @request_id = nil
     end
 
     # The message: the server's own sentence (or the SDK's), followed for a
@@ -164,7 +167,7 @@ module Kosa8
   FAILURE_CLASSES = %w[ok exit_nonzero timeout oom infra quota client].freeze
   INFRA_CODES = %w[host_failed not_ready no_capacity host_unreachable host_unavailable host_busy host_restarting
                    wake_failed try_again internal kernel_failed egress_failed dns_unreachable host_lost host_removed
-                   insufficient_storage starting].freeze
+                   insufficient_storage starting database_busy].freeze
   RATE_CODES = %w[rate_limited slow_down too_soon].freeze
   QUOTA_CODES = %w[quota_exceeded running_limit plan_required plan_limit plan_feature payment_required payment_declined
                    spending_cap_reached snapshot_limit org_frozen org_suspended too_many_runs].freeze
@@ -177,6 +180,9 @@ module Kosa8
     c = code.is_a?(String) ? code : ""
     return ["ok", false] if status < 400
     return ["timeout", false] if c == "exec_timeout"
+    return ["infra", true] if c == IDEMPOTENCY_IN_PROGRESS || c == "template_building"
+    # A bad parameter is the caller's to fix, whatever it names (invalid_timeout).
+    return ["client", false] if status < 500 && /\A(invalid|bad|missing|unknown)_/.match?(c)
     return ["timeout", true] if c.include?("timeout")
     return ["quota", true] if RATE_CODES.include?(c)
     return ["quota", false] if QUOTA_CODES.include?(c) || status == 402 || status == 423

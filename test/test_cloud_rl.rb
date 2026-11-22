@@ -526,7 +526,7 @@ class CloudRLTest < Minitest::Test
   end
 
   def test_run_flush_keeps_rows_on_error_and_open_block_fails_the_run
-    answers = [[500, { "error" => "internal" }]]
+    answers = [[500, { "error" => "internal" }]] * 3
     f = fake do |r|
       if r[:path] == "/v1/rl/runs" then [201, { "run" => { "id" => "run_9" } }]
       elsif r[:path].end_with?("/rollouts") then answers.shift || [200, { "recorded" => r[:body]["rollouts"].size }]
@@ -540,7 +540,11 @@ class CloudRLTest < Minitest::Test
       Kosa8::RL::Run.open(c, "x", heartbeat_s: 60) do |r|
         run = r
         r.record([{ "reward" => 1 }, { "reward" => 0 }], flush: false)
-        assert_raises(Kosa8::ApiError) { r.flush } # a POST of rollouts is not retried on a 5xx
+        # A POST of rollouts carries an Idempotency-Key, so a 5xx is retried,
+        # up to the policy's 3 attempts; then the rows stay buffered.
+        assert_raises(Kosa8::ApiError) { r.flush }
+        assert_equal 3, f.calls("POST", "/v1/rl/runs/run_9/rollouts").size
+        assert_equal 1, f.calls("POST", "/v1/rl/runs/run_9/rollouts").map { |x| x[:headers]["idempotency-key"] }.uniq.size
         assert_equal 2, r.pending
         raise "trainer crashed"
       end
