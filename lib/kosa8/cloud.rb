@@ -88,7 +88,9 @@ module Kosa8
     # jitter) is applied where trying again is safe: reads, PUTs, deletes,
     # heartbeats and drains on infra failures; the calls that make sandboxes
     # (create, batch, fork, grade), job submits and rollout records, which
-    # carry an Idempotency-Key reused on every retry; and any request the
+    # carry an Idempotency-Key (the SDK's own is reused after no answer, a
+    # 429 or a 409, and renewed after a 5xx; yours is never changed); and
+    # any request the
     # server refused before running it (429, 503 database_busy, 409
     # template_building), waiting at least its Retry-After (or the body's
     # retry_after / retry_after_s). An answer with retryable: false is never
@@ -141,8 +143,10 @@ module Kosa8
 
     # One JSON request, retried as retry_policy allows; raises the typed
     # error for an error answer. A call that makes sandboxes (Cloud.keyed?)
-    # sends +idempotency_key+ (a new UUID when not given), the same on every
-    # retry, so it may be retried after a timeout or a 5xx too.
+    # sends +idempotency_key+ (a new UUID when not given), so it may be
+    # retried after a timeout or a 5xx too. A given key goes unchanged with
+    # every retry; the SDK's own is kept after no answer, a 429 or a 409 and
+    # replaced after a 5xx (Cloud.renews_idempotency_key?).
     #
     # +opts+ (a Hash, not keywords, so an empty body Hash stays the body):
     # :idempotency_key and :retry_policy.
@@ -183,6 +187,16 @@ module Kosa8
       e.is_a?(Error) && (e.status == 429 || PRE_EXECUTION_CODES.include?(e.code))
     end
 
+    # Whether a retry after +e+ gets a new SDK-made Idempotency-Key: only
+    # when kosa8 Cloud answered with a 5xx (502 host_failed, 503
+    # no_capacity, ...), so each retry of a server-side failure is a new
+    # attempt. No answer (a timeout or a dropped connection: the first try
+    # may still be running and may have made the sandbox), a 429 and a 409
+    # (idempotency_in_progress, template_building) keep the key.
+    def self.renews_idempotency_key?(e)
+      e.is_a?(Error) && e.status.is_a?(Integer) && e.status >= 500
+    end
+
     def self.check_idempotency_key(key)
       return if key.nil? || (key.is_a?(String) && IDEMPOTENCY_KEY.match?(key))
 
@@ -192,7 +206,8 @@ module Kosa8
     private def perform(method, path, body, data, raw, idempotency_key, policy)
       Cloud.check_idempotency_key(idempotency_key)
       extra = {}
-      if !idempotency_key.nil? || Cloud.keyed?(method, path)
+      own_key = idempotency_key.nil? && Cloud.keyed?(method, path)
+      if !idempotency_key.nil? || own_key
         extra["Idempotency-Key"] = idempotency_key || SecureRandom.uuid
       end
       policy ||= @retry_policy
@@ -206,6 +221,7 @@ module Kosa8
           raise unless policy.retry?(e, attempt) && (safe || Cloud.pre_execution?(e))
 
           @sleeper.call(policy.delay(e, attempt))
+          extra["Idempotency-Key"] = SecureRandom.uuid if own_key && Cloud.renews_idempotency_key?(e)
           attempt += 1
         end
       end
@@ -666,7 +682,7 @@ module Kosa8
     # of failing the call; false is all or nothing. The API's default is true
     # when a fan-out option is given or n is over 100. A fork that made none
     # raises the first refusal. The call carries an Idempotency-Key
-    # (+idempotency_key+, default a new UUID) reused on every retry.
+    # (+idempotency_key+, default a new UUID; see Cloud#request for retries).
     #
     # Needs the host's data plane; on hosts without it the API answers 501
     # (not_available/not_supported), raised as Kosa8::UnsupportedError. Not

@@ -263,8 +263,8 @@ module Kosa8
     # <prefix>-0001, ...) and partial_ok: (default true: make what fits and
     # list the rest in +failed+; false: all or nothing). Nothing made raises
     # the first refusal. Carries an Idempotency-Key (+idempotency_key+,
-    # default a new UUID) reused on every retry, so a retried batch never
-    # doubles the fleet.
+    # default a new UUID) reused after a timeout, so a retried batch never
+    # doubles the fleet (the default is renewed after a 5xx).
     def create_many(count, labels: nil, run_id: nil, lease_s: nil, prefix: nil, partial_ok: nil,
                     idempotency_key: nil, **create_opts)
       unless count.is_a?(Integer) && count.between?(1, Cloud::MAX_BATCH)
@@ -340,8 +340,8 @@ module Kosa8
     # 0 and 0.0 otherwise; nil when the command did not finish. With run_id:
     # it is recorded as a rollout of that run (rollout: step, group, index,
     # meta), so do not record it again. files: at most 64, 8 MiB in all;
-    # timeout_s: 1 to 90. The call carries an Idempotency-Key reused on every
-    # retry: a retry gets the first grade's answer and records nothing twice.
+    # timeout_s: 1 to 90. The call carries an Idempotency-Key reused after a
+    # timeout: that retry gets the first answer and records nothing twice.
     def grade(cmd, files: nil, timeout_s: nil, env: nil, keep: false, run_id: nil, rollout: nil, idempotency_key: nil)
       run_id = (@cloud.run_defaults || {})["run_id"] if run_id.nil?
       body = Cloud.grade_body(cmd, files: files, timeout_s: timeout_s, env: env, keep: keep, run_id: run_id,

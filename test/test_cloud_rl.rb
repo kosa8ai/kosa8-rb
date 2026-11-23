@@ -144,7 +144,7 @@ class CloudRLTest < Minitest::Test
     assert_equal 2, f.seen.size
   end
 
-  def test_create_retries_with_the_same_idempotency_key
+  def test_create_retries_with_a_new_idempotency_key_after_a_5xx
     answers = [[503, { "error" => "no_capacity" }], [201, { "sandbox" => sbx }]]
     f = fake { answers.shift }
     c = f.cloud
@@ -153,7 +153,8 @@ class CloudRLTest < Minitest::Test
     keys = f.seen.map { |s| s[:headers]["idempotency-key"] }
     assert_equal 2, keys.size
     assert_match(/\A[0-9a-f-]{36}\z/, keys[0])
-    assert_equal keys[0], keys[1]
+    assert_match(/\A[0-9a-f-]{36}\z/, keys[1])
+    refute_equal keys[0], keys[1], "the SDK's own key is renewed after a 5xx"
     assert_equal({ "template" => "python", "lease_s" => 600 }, f.seen[0][:body])
 
     answers.replace([[201, { "sandbox" => sbx }]])
@@ -305,7 +306,7 @@ class CloudRLTest < Minitest::Test
     assert_equal "/v1/sandboxes/sbx_1/grade", f.seen[0][:path]
     k = f.seen.map { |s| s[:headers]["idempotency-key"] }
     assert_equal 2, k.size
-    assert_equal k[0], k[1], "the retry reuses the key"
+    refute_equal k[0], k[1], "the retry after a 502 gets a new key"
     c.sandboxes.grade("sbx_9", "make test", keep: true, idempotency_key: "g1")
     assert_equal({ "cmd" => ["sh", "-c", "make test"], "keep" => true }, f.seen.last[:body])
     assert_equal "/v1/sandboxes/sbx_9/grade", f.seen.last[:path]
@@ -541,10 +542,11 @@ class CloudRLTest < Minitest::Test
         run = r
         r.record([{ "reward" => 1 }, { "reward" => 0 }], flush: false)
         # A POST of rollouts carries an Idempotency-Key, so a 5xx is retried,
-        # up to the policy's 3 attempts; then the rows stay buffered.
+        # up to the policy's 3 attempts (each with a new key after the 5xx);
+        # then the rows stay buffered.
         assert_raises(Kosa8::ApiError) { r.flush }
         assert_equal 3, f.calls("POST", "/v1/rl/runs/run_9/rollouts").size
-        assert_equal 1, f.calls("POST", "/v1/rl/runs/run_9/rollouts").map { |x| x[:headers]["idempotency-key"] }.uniq.size
+        assert_equal 3, f.calls("POST", "/v1/rl/runs/run_9/rollouts").map { |x| x[:headers]["idempotency-key"] }.uniq.size
         assert_equal 2, r.pending
         raise "trainer crashed"
       end
