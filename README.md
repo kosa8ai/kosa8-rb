@@ -1,6 +1,8 @@
 # kosa8 (Ruby)
 
-The Ruby SDK for [kosa8](https://kosa8.com): microVM sandboxes for AI agents. No dependencies; Ruby 2.6+.
+**[kosa8](https://kosa8.com): Zero Trust cybersecurity infrastructure for AI agents.**
+
+The Ruby SDK for [kosa8](https://kosa8.com): each agent in its own microVM. No dependencies; Ruby 2.6+.
 Method for method it matches [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js), the Python `kosa8` package and `kosa8-go`.
 
 ## Quickstart: kosa8 Cloud
