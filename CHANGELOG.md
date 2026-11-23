@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Retries of creates, batches, forks, grades, job submits and rollout records use a new SDK-made
+  `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` /
+  `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still
+  kept after no answer (the first try may have created the sandbox), a 429 and a 409
+  `idempotency_in_progress` / `template_building`. A key you pass as `idempotency_key:` is never
+  changed. Retry-After is honoured as before. `Kosa8::Cloud.renews_idempotency_key?(e)` says which
+  failures renew it.
+
 ## 0.6.0 - 2026-11-22
 
 The Ruby SDK now covers what the Python and JS SDKs do (no longer "core tier" only):

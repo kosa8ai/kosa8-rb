@@ -437,7 +437,7 @@ module Kosa8
   # cloud.jobs: hosted eval and RL jobs. kosa8 runs each task in its own
   # sandbox (template:, image: or snapshot:), runs the solver then the sealed
   # grader, records every rollout under the job's RL run and stops at
-  # +budget_usd+. A submit carries an Idempotency-Key reused on every retry.
+  # +budget_usd+. A submit carries an Idempotency-Key (see Cloud#request).
   class CloudJobs
     DONE_STATES = %w[done failed cancelled budget_reached].freeze
     MAX_TASKS = 10_000

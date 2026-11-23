@@ -122,8 +122,10 @@ module Kosa8
     #   #heartbeat extends it, so a crashed client leaks nothing (not with
     #   ttl_s: or delete_after:). run_id: labels it kosa8.run=<run_id>.
     # - idempotency_key: is sent as the Idempotency-Key header (default a new
-    #   UUID) and reused on every retry, so a create retried after a timeout
-    #   or a 5xx makes one sandbox, not two.
+    #   UUID). The default is reused after a timeout, a dropped connection,
+    #   a 429 or a 409, so a retried create makes one sandbox, not two, and
+    #   renewed after a 5xx, so that retry is a new attempt. A key you pass
+    #   goes unchanged with every retry.
     #
     # Bad arguments raise ArgumentError before any request.
     def create(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil, accept_price: nil,

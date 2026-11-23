@@ -202,7 +202,10 @@ end
 ```
 
 Create, batch, fork, grade, job submits and rollout records send an `Idempotency-Key` (a UUID, or
-`idempotency_key:`) that every retry reuses, so a retry after a timeout never doubles the fleet.
+`idempotency_key:`). The SDK's own key is reused after no answer (a timeout or a dropped connection:
+the first try may still be running), a 429 and a 409 `idempotency_in_progress` / `template_building`,
+so such a retry never doubles the fleet; after a 5xx (502 `host_failed`, 503 `no_capacity`, ...) the
+retry gets a new key, so it is a new attempt. A key you pass is never changed.
 Retries (`Kosa8::RetryPolicy`: 3 tries, backoff with full jitter, at least the server's Retry-After or
 `retry_after`) apply only where safe: reads, PUTs and deletes, keyed POSTs, and any request the server
 refused before running it (429, 503 `database_busy`, 409 `template_building`). An answer marked
