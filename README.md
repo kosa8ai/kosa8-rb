@@ -235,7 +235,10 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
   `sh -c`, or create with `persistent: true` (one long-lived container) to keep the whole filesystem and
   background processes; the code interpreter (`run_code`) needs it, and it counts against your plan's
   persistent-sandbox limit.
-- **A buffered `exec` runs at most 90 seconds** and raises `Kosa8::ExecTimeoutError`.
+- **A buffered `exec` runs at most 90 seconds** and raises `Kosa8::ExecTimeoutError`. For longer
+  commands stream them: `box.exec_stream("make test") { |stream, text| print text }` (or `exec(cmd,
+  stream: true)`, `on_stdout:` / `on_stderr:`, or a `timeout_s:` over 90, up to a day) prints as the command
+  does and is not held to 90 s.
   `box.exec(cmd, timeout_s: 30)` stops a command sooner, in the sandbox (1 to 90 whole seconds). Run long
   work in the background and poll it:
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' &")`.
@@ -251,7 +254,7 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
 | `Kosa8::PaymentRequiredError` (402) | no payment method (`payment_required`), spending cap reached (`spending_cap_reached`), Store price not accepted (`price_not_accepted`) | show `e.upgrade_url`; an agent should relay `e.agent_message` to its person and stop |
 | `Kosa8::OrgFrozenError` (423, `org_frozen`) | the org is frozen in the Security Center | an owner or admin unfreezes it; retrying does not help |
 | `Kosa8::RateLimitError` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `e.retry_after` seconds when set, or delete sandboxes; for `quota_exceeded` relay `e.agent_message` and point at `e.request_url` |
-| `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past its 90 s limit | run it in the background and poll |
+| `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past its 90 s limit, or a command ran past its own `timeout_s` (`e.stdout` / `e.stderr` hold the output so far) | stream it (`exec_stream`), or run it in the background and poll |
 | `Kosa8::UnsupportedError` (501) | the host has no data plane yet (files, checkpoints, rewind, fork, ports), or the sandbox runs on overflow capacity (Cloudflare), which has no fork, checkpoint or sleep | use `exec`, or create it on a kosa8 host (a template, or a size such as `2x4`) |
 | `Kosa8::ApiError` (503 `database_busy`, 409 `template_building`) | the API's database was overloaded, or a benchmark environment is still building | retried for you (Retry-After); if it still fails, try again later |
 
