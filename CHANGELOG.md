@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- GitHub repos: `sandboxes.create(repo: "owner/name@ref")` (or `repo: { name:, ref:, path:, depth: }`) starts a
+  sandbox from a repo of the org's connected GitHub, cloned into /workspace/<name>; `info["repo"]` says whether the
+  clone is done. `cloud.github.status`, `repos(query, page:)`, `repos_page`, `branches("owner/name")`.
+  `box.repo` (with `changes`), `box.push(branch:, message:, path:)` and `box.pull_request(title:, body:, base:,
+  branch:, draft:)`. kosa8 uses a GitHub token for one repo, for one operation, that never enters the sandbox.
+- Typed errors: `GitHubNotConnectedError` (`connect_url`), `GitHubPermissionsError` (`missing_permissions`,
+  `settings_url`) and `NoChangesError` (all `ConflictError`), `RepoNotFoundError` (a `NotFoundError`) and
+  `GitHubUnavailableError` (502, `retry_after_s`).
+
 ## 0.7.0 - 2026-11-23
 
 - RL rollouts: each flushed chunk carries an Idempotency-Key that stays with those rows until

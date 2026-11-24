@@ -167,6 +167,23 @@ cloud.jobs.wait(job["id"]) { |j| puts j["progress"] }   # also estimate, list, g
 - `cloud.recordings` (`list`, `link`, `delete`), `cloud.burst` (`get`, `activate`),
   `cloud.functions.invocations(name)`, `cloud.attack_scorecards`.
 
+### GitHub repos
+
+Connect GitHub once (app.kosa8.com Settings → GitHub, or `kosa8 github connect`), then start from a repo
+and send the changes back. kosa8 uses a GitHub token for one repo, for one operation, that expires within an
+hour and never enters the sandbox.
+
+```ruby
+cloud.github.repos("api").each { |r| puts r["full_name"] }   # also status, branches("acme/api")
+box = cloud.sandboxes.create(repo: "acme/api@main")           # cloned into /workspace/api
+box.exec("cd /workspace/api && make fix")
+pr = box.pull_request(title: "Fix the build")                 # or box.push(branch: "fix")
+puts pr["url"]
+```
+
+Errors: `Kosa8::GitHubNotConnectedError#connect_url`, `GitHubPermissionsError#missing_permissions` and
+`#settings_url`, `NoChangesError`, `RepoNotFoundError`, `GitHubUnavailableError`.
+
 ### Secrets and Pipelines
 
 ```ruby
