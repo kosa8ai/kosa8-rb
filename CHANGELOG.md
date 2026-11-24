@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Every Cloud error (`Kosa8::ApiError`) now reads the API's contract fields: `agent_message` and
+  `request_url` on a 429 `quota_exceeded` (before, only a 402 had `agent_message`), and for a 402
+  `plan_limit` / `plan_feature` `limit_name`, `limit`, `used`, `plan`, `next_plan`, `feature`, `options` and
+  `pack_url`. `ExecTimeoutError#stdout` / `#stderr` / `#limit_s` give the output a command stopped at its
+  `timeout_s` had printed.
 - Retries of creates, batches, forks, grades, job submits and rollout records use a new SDK-made
   `Idempotency-Key` after a 5xx (502 `host_failed`, 503 `no_capacity` / `host_restarting` /
   `host_unavailable`, 504), so each retry of a server-side failure is a new attempt. The key is still
