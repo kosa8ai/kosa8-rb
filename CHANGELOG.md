@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-11-24
 
 - GitHub repos: `sandboxes.create(repo: "owner/name@ref")` (or `repo: { name:, ref:, path:, depth: }`) starts a
   sandbox from a repo of the org's connected GitHub, cloned into /workspace/<name>; `info["repo"]` says whether the
