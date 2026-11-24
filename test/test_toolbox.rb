@@ -229,7 +229,9 @@ class ToolboxTest < Minitest::Test
       FileUtils.mkdir_p(File.join(dir, "src"))
       File.write(File.join(dir, "src", "keep.txt"), "k")
       File.write(File.join(dir, "secret.env"), "S=1")
-      File.write(File.join(dir, ".dockerignore"), "# comment\nnode_modules\n./secret.env\n\n")
+      FileUtils.mkdir_p(File.join(dir, "build"))
+      File.write(File.join(dir, "build", "out.bin"), "b")
+      File.write(File.join(dir, ".dockerignore"), "# comment\nnode_modules\n./secret.env\n/build\n/\n\n")
       @d.on("POST", "/kosa8/v1/templates") do
         MockDaemon.frames(MockDaemon.frame("stdout", "Step 1/1\n"), { "done" => true, "ok" => true, "template" => "t" })
       end
@@ -249,6 +251,7 @@ class ToolboxTest < Minitest::Test
       assert_includes names, ".dockerignore"
       refute(names.any? { |n| n.start_with?("node_modules") })
       refute_includes names, "secret.env"
+      refute(names.any? { |n| n.start_with?("build") }, "a leading / in .dockerignore is the context root")
     end
   end
 
