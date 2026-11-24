@@ -274,6 +274,10 @@ module Kosa8
         @recorded = 0
         @status = nil
         @buf = []
+        # The chunk being sent and its Idempotency-Key, kept together until
+        # kosa8 Cloud answers: a later flush resends the same rows with the
+        # same key, so a send whose answer was lost is stored once.
+        @inflight = nil
         @buf_lock = Mutex.new
         @flush_lock = Mutex.new
         @lease = nil
@@ -352,15 +356,18 @@ module Kosa8
         sent = 0
         @flush_lock.synchronize do
           loop do
-            chunk = @buf_lock.synchronize { @buf.shift(MAX_ROWS_PER_CALL) }
-            return sent if chunk.empty?
-
-            begin
-              r = @cloud.request("POST", path("/rollouts"), { "rollouts" => chunk })
-            rescue Exception # rubocop:disable Lint/RescueException
-              @buf_lock.synchronize { @buf.unshift(*chunk) }
-              raise
+            @buf_lock.synchronize do
+              if @inflight.nil?
+                rows = @buf.shift(MAX_ROWS_PER_CALL)
+                @inflight = [rows, SecureRandom.uuid] unless rows.empty?
+              end
             end
+            return sent if @inflight.nil?
+
+            chunk, key = @inflight
+            # On an error the chunk stays in flight with its key, for the next flush.
+            r = @cloud.request("POST", path("/rollouts"), { "rollouts" => chunk }, { idempotency_key: key })
+            @buf_lock.synchronize { @inflight = nil }
             n = r.is_a?(Hash) && r["recorded"].is_a?(Integer) ? r["recorded"] : chunk.size
             sent += n
             @recorded += n
@@ -370,7 +377,7 @@ module Kosa8
 
       # Rollouts buffered, not yet sent.
       def pending
-        @buf_lock.synchronize { @buf.size }
+        @buf_lock.synchronize { @buf.size + (@inflight ? @inflight[0].size : 0) }
       end
 
       # The run with its summary (rewards, failure classes, live sandboxes,
