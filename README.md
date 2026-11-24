@@ -184,6 +184,22 @@ puts pr["url"]
 Errors: `Kosa8::GitHubNotConnectedError#connect_url`, `GitHubPermissionsError#missing_permissions` and
 `#settings_url`, `NoChangesError`, `RepoNotFoundError`, `GitHubUnavailableError`.
 
+### Autopilot bots
+
+Bots watch the org's sandboxes, spend and agents and act. They start as drafts; a person turns one on.
+
+```ruby
+puts cloud.bots.plan(template: "spend-guard", replay: true)["plan"]["summary"]
+bot = cloud.bots.create(template: "spend-guard", budget_usd: 5)   # a draft
+run = cloud.bots.run(bot["id"])          # dry run by default: what it would do, plus a 7-day replay
+cloud.bots.pause_all                     # any admin credential, agents included, can stop every bot
+cloud.approvals.list                     # T3 actions waiting on a person
+```
+
+`enable`, `resume_all` and `approvals.approve` / `reject` need a person's credential; anything else raises
+`Kosa8::HumanApprovalRequired` (403 `human_required`). An agent never approves its own action: a person approves
+in the web app, desktop, CLI or Slack.
+
 ### Secrets and Pipelines
 
 ```ruby

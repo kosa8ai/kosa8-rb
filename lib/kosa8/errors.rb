@@ -167,11 +167,18 @@ module Kosa8
   # again after #retry_after_s.
   class GitHubUnavailableError < ApiError; end
 
+  # 403 human_required: only a person can do this (turn a bot on, resume every
+  # bot, decide an approval). Capability tokens, MCP and org keys bound to no
+  # member are never a person. An agent never approves its own action; a
+  # person approves in the web app (app.kosa8.com/app#autopilot), desktop, CLI
+  # or Slack. There is no way around it from code.
+  class HumanApprovalRequired < PolicyError; end
+
   # Typed errors by kosa8 Cloud code, before the status fallback.
   BY_CODE = {
     "github_not_connected" => GitHubNotConnectedError, "github_permissions" => GitHubPermissionsError,
     "no_changes" => NoChangesError, "repo_not_found" => RepoNotFoundError,
-    "github_unavailable" => GitHubUnavailableError
+    "github_unavailable" => GitHubUnavailableError, "human_required" => HumanApprovalRequired
   }.freeze
 
   # 402: kosa8 Cloud wants a payment method, credit or an accepted price first
