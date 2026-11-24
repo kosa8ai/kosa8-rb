@@ -103,8 +103,10 @@ copy = cloud.sandboxes.create(snapshot: snap["id"])
 cloud.snapshots.delete(snap["id"])                  # also list, get
 ```
 
-Also `cpus:`/`mem_mb:`, `disk_gb:`, `persistent:`, `cpu: "dedicated"`, `region:` (`us`, `eu` or
-an id), `secrets:` and `egress:`. `list` takes `name:` and `labels:`.
+Also `cpus:`/`mem_mb:`, `disk_gb:` (8 to 500; past 200 on plans with a bigger sandbox disk), `persistent:`,
+`cpu: "dedicated"`, `kvm: true` (preview: `/dev/kvm` for an emulator), `region:` (`us-ash1`, the one live
+region, or `us`), `secrets:` and `egress:`. `list` takes `name:` and `labels:`. `exec` results carry
+`stdout_truncated` / `stdout_bytes` (and stderr's) when a buffered exec dropped the middle of its output.
 
 ### Background commands, previews, terminal and more
 

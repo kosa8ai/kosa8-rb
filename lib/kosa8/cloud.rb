@@ -13,7 +13,12 @@ module Kosa8
   # and woke for this command.
   # +failure_class+ is "ok" (exit 0), "exit_nonzero" (the command failed) or
   # "infra" (the host gave no exit code; +retryable+ true).
+  # A buffered exec keeps the first and last 1 MiB of each stream:
+  # +stdout_truncated+ / +stderr_truncated+ are true when the middle was
+  # dropped, and +stdout_bytes+ / +stderr_bytes+ count what the command
+  # wrote, kept or not (nil when the server did not say).
   CloudExecResult = Struct.new(:exit_code, :stdout, :stderr, :woke_ms, :failure_class, :retryable,
+                               :stdout_truncated, :stderr_truncated, :stdout_bytes, :stderr_bytes,
                                keyword_init: true) do
     def ok?
       exit_code == 0 # exit_code is nil when the command never ran
@@ -576,7 +581,9 @@ module Kosa8
       fc = r["failure_class"] if r["failure_class"].is_a?(String)
       rt = r["retryable"] if r["retryable"] == true || r["retryable"] == false
       CloudExecResult.new(exit_code: r["exit"], stdout: r["stdout"] || "", stderr: r["stderr"] || "",
-                          woke_ms: r["woke_ms"], failure_class: fc, retryable: rt)
+                          woke_ms: r["woke_ms"], failure_class: fc, retryable: rt,
+                          stdout_truncated: r["stdout_truncated"] == true, stderr_truncated: r["stderr_truncated"] == true,
+                          stdout_bytes: r["stdout_bytes"], stderr_bytes: r["stderr_bytes"])
     end
 
     # Snapshot it and free its VM; it then costs only snapshot storage.

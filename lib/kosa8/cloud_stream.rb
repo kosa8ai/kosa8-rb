@@ -322,7 +322,8 @@ module Kosa8
       end
       fc, rt = Kosa8.exec_failure(reader.exit_code)
       CloudExecResult.new(exit_code: reader.exit_code, stdout: reader.stdout, stderr: reader.stderr, woke_ms: nil,
-                          failure_class: fc, retryable: rt)
+                          failure_class: fc, retryable: rt, stdout_truncated: false, stderr_truncated: false,
+                          stdout_bytes: reader.stdout.bytesize, stderr_bytes: reader.stderr.bytesize)
     end
   end
 end

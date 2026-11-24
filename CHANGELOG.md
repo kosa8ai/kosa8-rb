@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `sandboxes.create(disk_gb:)` takes up to 500 (was refused past 200, though Team and Scale plans allow 256
+  and 500); `kvm: true` (preview). A create from a snapshot also refuses `mem_mb:` and `kvm:`.
+  `exec_background(timeout_s:)` (up to a day). `CloudExecResult` has `stdout_truncated`, `stderr_truncated`,
+  `stdout_bytes` and `stderr_bytes`. README: the live region is `us-ash1` (`eu` is not offered).
 - Files: `read` / `download` take `range:` (`0..1023`, `1024..`, `-500` or `"bytes=a-b"`; one Range header);
   `write` takes `offset:`, `append: true` and `mode:`; `upload` takes an IO (a File is read a part at a time)
   and sends anything past `part_size:` (64 MiB) in parts with `offset=`, so files over the API's 100 MB request
