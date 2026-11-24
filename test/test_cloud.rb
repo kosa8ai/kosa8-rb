@@ -107,7 +107,8 @@ class CloudTest < Minitest::Test
     e = assert_raises(Kosa8::ExecTimeoutError) { box.exec("sleep 9", timeout_s: 2) }
     refute_match(/background/, e.message)
     n = stub.seen.size
-    [0, 91, 1.5, "5"].each { |bad| assert_raises(ArgumentError) { box.exec("true", timeout_s: bad) } }
+    # Over 90 s an exec is streamed (no 90 s limit); a day is the most.
+    [0, 86_401, 1.5, "5"].each { |bad| assert_raises(ArgumentError) { box.exec("true", timeout_s: bad) } }
     assert_equal n, stub.seen.size, "a bad timeout_s is not sent"
   end
 

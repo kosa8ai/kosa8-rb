@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Streamed exec: `CloudSandbox#exec_stream(cmd, timeout_s:, on_stdout:, on_stderr:) { |stream, text| ... }`
+  reads the output as the command prints it (NDJSON frames, heartbeats skipped, UTF-8 decoded across chunks)
+  and is not held to the 90 s of a buffered exec; `timeout_s` up to a day. `exec` streams when given
+  `stream: true`, `on_stdout:` / `on_stderr:` or a `timeout_s` over 90 (as the Python SDK). A command
+  stopped at its `timeout_s` raises `ExecTimeoutError` with the output so far; a broken stream raises
+  `StreamError`. `Cloud.new(stream_transport:)` replaces Net::HTTP for streamed answers (tests).
 - Every Cloud error (`Kosa8::ApiError`) now reads the API's contract fields: `agent_message` and
   `request_url` on a 429 `quota_exceeded` (before, only a 402 had `agent_message`), and for a 402
   `plan_limit` / `plan_feature` `limit_name`, `limit`, `used`, `plan`, `next_plan`, `feature`, `options` and
