@@ -104,9 +104,13 @@ module Kosa8
     # - size: "2x4", "4x8", "8x16" or "16x32" (vCPU x GiB), a small size
     #   "0.25x0.5", "0.5x1" or "1x2" (Cloud::SMALL_SIZES), or cpus: and
     #   mem_mb: (cpus: 0.25, mem_mb: 512 is the smallest); image: an OCI image (such as
-    #   "kosa8-template/universal-24.04-20261115.2"); disk_gb: 8..200. Any of
+    #   "kosa8-template/universal-24.04-20261115.2"); disk_gb: 8..500 (past 200 only on plans with a bigger sandbox disk:
+    #   Team 256, Scale 500; GET /v1/templates max_disk_gb is yours). Any of
     #   these boots the sandbox cold at that size: create waits for it to
     #   run unless wait: false (then call #wait_running).
+    # - kvm: true (preview) gives it /dev/kvm for an emulator at hardware
+    #   speed; needs a size or image, implies persistent and docker, never
+    #   sleeps (501 not_available while no host has nested KVM).
     # - docker: true lets it run its own Docker engine (start dockerd first);
     #   persistent: true runs every exec in one long-lived container;
     #   cpu: "dedicated" gives it whole physical cores.
@@ -132,12 +136,13 @@ module Kosa8
     def create(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil, accept_price: nil,
                size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil, persistent: nil, docker: nil, cpu: nil,
                name: nil, labels: nil, env: nil, secrets: nil, egress: nil, snapshot: nil, wait: true,
-               poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil, record: nil, ai_gateway: nil)
+               poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil, record: nil, ai_gateway: nil,
+               kvm: nil)
       body = create_body(template: template, region: region, sleep_after_s: sleep_after_s, ttl_s: ttl_s,
                          delete_after: delete_after, accept_price: accept_price, size: size, cpus: cpus,
                          mem_mb: mem_mb, image: image, disk_gb: disk_gb, persistent: persistent, docker: docker,
                          cpu: cpu, name: name, labels: labels, env: env, secrets: secrets, egress: egress,
-                         snapshot: snapshot, record: record, ai_gateway: ai_gateway)
+                         snapshot: snapshot, record: record, ai_gateway: ai_gateway, kvm: kvm)
       amb = @cloud.run_defaults || {}
       run_id = amb["run_id"] if run_id.nil?
       if lease_s.nil? && ttl_s.nil? && delete_after.nil?
@@ -163,7 +168,7 @@ module Kosa8
     def create_body(template: nil, region: nil, sleep_after_s: nil, ttl_s: nil, delete_after: nil,
                     accept_price: nil, size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil,
                     persistent: nil, docker: nil, cpu: nil, name: nil, labels: nil, env: nil, secrets: nil,
-                    egress: nil, snapshot: nil, record: nil, ai_gateway: nil)
+                    egress: nil, snapshot: nil, record: nil, ai_gateway: nil, kvm: nil)
       Cloud.check_lifetime(ttl_s, delete_after)
       Cloud.check_sleep_after(sleep_after_s)
       if !accept_price.nil? && !accept_price.is_a?(Numeric)
@@ -189,10 +194,11 @@ module Kosa8
       body["egress"] = Cloud.egress_body(egress) unless egress.nil?
       body["record"] = record == true unless record.nil?
       body["ai_gateway"] = ai_gateway == true unless ai_gateway.nil?
+      body["kvm"] = kvm == true unless kvm.nil?
       unless snapshot.nil?
         raise ArgumentError, "snapshot: is a snapshot id (snap_...)" unless Cloud::SNAPSHOT_ID.match?(snapshot.to_s)
 
-        clash = %w[template region size cpus image disk_gb persistent docker cpu] & body.keys
+        clash = %w[template region size cpus mem_mb image disk_gb persistent docker kvm cpu] & body.keys
         unless clash.empty?
           raise ArgumentError, "a create from a snapshot takes the snapshot's #{clash.join(', ')}; give only env:, name:, labels:, a lifetime or sleep_after_s:"
         end
@@ -250,7 +256,7 @@ module Kosa8
       end
       body["image"] = image.to_s unless image.nil?
       unless disk_gb.nil?
-        raise ArgumentError, "disk_gb must be 8 to 200" unless disk_gb.is_a?(Integer) && disk_gb.between?(8, 200)
+        raise ArgumentError, "disk_gb must be 8 to 500" unless disk_gb.is_a?(Integer) && disk_gb.between?(8, 500)
 
         body["disk_gb"] = disk_gb
       end
@@ -283,11 +289,17 @@ module Kosa8
     # limit). Returns the background command (a Hash: "id" (bg_...),
     # "state", "pid", "output_path", ...); poll it with #background_exec or
     # #wait_background.
-    def exec_background(cmd, image: nil, env: nil)
+    # +timeout_s+ (1 s to a day) has the host end it then ("timed_out" in
+    # #background_exec).
+    def exec_background(cmd, image: nil, env: nil, timeout_s: nil)
       argv = cmd.is_a?(String) ? ["sh", "-c", cmd] : cmd.to_a
       raise ArgumentError, "exec_background needs a command" if argv.empty?
+      unless timeout_s.nil? || (timeout_s.is_a?(Integer) && timeout_s.between?(1, 86_400))
+        raise ArgumentError, "timeout_s must be a whole number of seconds from 1 to 86400"
+      end
 
       body = { "cmd" => argv, "background" => true }
+      body["timeout_s"] = timeout_s unless timeout_s.nil?
       body["image"] = image unless image.nil?
       body["env"] = Cloud.env_list(env) if env && !env.empty?
       @cloud.request("POST", path("/exec"), body)["exec"]
