@@ -157,9 +157,10 @@ module Kosa8
 
     # One request whose body is +data+ (raw bytes, application/octet-stream)
     # when given; with +raw+ a successful answer's bytes come back as a binary
-    # String instead of parsed JSON. Raises the typed error for an error answer.
-    def request_bytes(method, path, data: nil, raw: false, retry_policy: nil)
-      perform(method, path, nil, data, raw, nil, retry_policy)
+    # String instead of parsed JSON. +headers+ are sent too (such as Range).
+    # Raises the typed error for an error answer.
+    def request_bytes(method, path, data: nil, raw: false, retry_policy: nil, headers: nil)
+      perform(method, path, nil, data, raw, nil, retry_policy, headers)
     end
 
     # Methods safe to send twice. Other POSTs are retried only when the
@@ -197,22 +198,32 @@ module Kosa8
       e.is_a?(Error) && e.status.is_a?(Integer) && e.status >= 500
     end
 
+    # Whether +path+ is a file write with append= (not safe to send twice).
+    def self.append_write?(path)
+      q = path.to_s.split("?", 2)[1].to_s
+      URI.decode_www_form(q).any? { |k, v| k == "append" && %w[1 true].include?(v) }
+    rescue ArgumentError
+      false
+    end
+
     def self.check_idempotency_key(key)
       return if key.nil? || (key.is_a?(String) && IDEMPOTENCY_KEY.match?(key))
 
       raise ArgumentError, "idempotency_key must be 1-255 printable ASCII characters, e.g. a UUID"
     end
 
-    private def perform(method, path, body, data, raw, idempotency_key, policy)
+    private def perform(method, path, body, data, raw, idempotency_key, policy, headers = nil)
       Cloud.check_idempotency_key(idempotency_key)
-      extra = {}
+      extra = (headers || {}).map { |k, v| [k.to_s, v.to_s] }.to_h
       own_key = idempotency_key.nil? && Cloud.keyed?(method, path)
       if !idempotency_key.nil? || own_key
         extra["Idempotency-Key"] = idempotency_key || SecureRandom.uuid
       end
       policy ||= @retry_policy
       bare = path.to_s.split("?", 2)[0]
-      safe = !extra.empty? || IDEMPOTENT_METHODS.include?(method) || IDEMPOTENT_POSTS.include?(bare)
+      safe = extra.key?("Idempotency-Key") || IDEMPOTENT_METHODS.include?(method) || IDEMPOTENT_POSTS.include?(bare)
+      # An append adds the body again if sent twice: retried only when refused before it ran.
+      safe = false if method == "PUT" && Cloud.append_write?(path)
       attempt = 1
       loop do
         begin
@@ -716,10 +727,15 @@ module Kosa8
     end
   end
 
-  # sandbox.files: files in a cloud sandbox, at most 8 MiB each. Paths are
-  # absolute, such as /workspace/app.py; only /workspace outlives an exec. A
-  # sleeping sandbox wakes first. File info Hashes have "name", "path",
-  # "type" ("file" or "dir"), "size", "mode" and "mod_time".
+  # sandbox.files: files in a cloud sandbox. Paths are absolute, such as
+  # /workspace/app.py; only /workspace outlives an exec. A sleeping sandbox
+  # wakes first. File info Hashes have "name", "path", "type" ("file" or
+  # "dir"), "size", "mode" and "mod_time".
+  #
+  # The bytes stream to and from the sandbox's host, so a file has no size
+  # cap but its disk; one request body is at most 100 MB through the API
+  # (#upload sends a bigger one in parts). Hosts without streamed files
+  # take at most 8 MiB a file (413 too_large).
   #
   # Needs the host's data plane; on hosts without it the API answers 501
   # (not_available/not_supported), raised as Kosa8::UnsupportedError. Not every
@@ -734,9 +750,11 @@ module Kosa8
       "#<Kosa8::CloudFiles sandbox=#{@sandbox.id.inspect}>"
     end
 
-    # The file's bytes, as a binary (ASCII-8BIT) String.
-    def read(path)
-      @cloud.request_bytes("GET", query("/files", path), raw: true)
+    # The file's bytes, as a binary (ASCII-8BIT) String. +range+ reads part
+    # of it: a Range of byte offsets (100..199, 100..), a negative Integer
+    # for the last bytes (-500), or "bytes=a-b" as sent.
+    def read(path, range: nil)
+      @cloud.request_bytes("GET", query("/files", path), raw: true, headers: CloudFiles.range_header(range))
     end
 
     # The file as text (UTF-8 by default).
@@ -745,10 +763,62 @@ module Kosa8
     end
 
     # Create or replace a file with +content+ (a String; sent as raw bytes).
-    # Returns its info Hash.
-    def write(path, content)
-      r = @cloud.request_bytes("PUT", query("/files", path), data: content.to_s)
+    # Returns its info Hash. +offset:+ writes it at that byte, keeping the
+    # rest of the file (parts of a big file, in any order); +append: true+
+    # adds it at the end (never retried after no answer, so it is not added
+    # twice); +mode:+ sets permission bits ("755" or 0o755).
+    def write(path, content, offset: nil, append: false, mode: nil)
+      r = @cloud.request_bytes("PUT", query("/files", path, CloudFiles.put_params(offset, append, mode)),
+                               data: content.to_s)
       r.is_a?(Hash) ? (r["file"] || {}) : {}
+    end
+
+    # The Range header for +range+ (see #read), or nil.
+    def self.range_header(range)
+      return nil if range.nil?
+
+      v = case range
+          when String then range
+          when Integer
+            raise ArgumentError, "range: a negative Integer reads the last bytes, e.g. -500" unless range.negative?
+
+            "bytes=#{range}"
+          when Range
+            first = range.begin
+            last = range.end
+            unless first.is_a?(Integer) && first >= 0 && (last.nil? || (last.is_a?(Integer) && last >= first))
+              raise ArgumentError, "range: byte offsets from 0, e.g. 0..1023 or 1024.."
+            end
+
+            last -= 1 if !last.nil? && range.exclude_end?
+            raise ArgumentError, "range: an empty Range" if !last.nil? && last < first
+
+            "bytes=#{first}-#{last}"
+          else raise ArgumentError, "range: a Range of byte offsets, a negative Integer or \"bytes=a-b\""
+          end
+      raise ArgumentError, "range: one byte range, bytes=a-b, a- or -n" unless /\Abytes=(\d+-\d*|-\d+)\z/.match?(v)
+
+      { "Range" => v }
+    end
+
+    # The query parameters of a write (offset=, append=, mode=).
+    def self.put_params(offset, append, mode)
+      out = []
+      raise ArgumentError, "give offset: or append: true, not both" if !offset.nil? && append
+
+      unless offset.nil?
+        raise ArgumentError, "offset: a whole number of bytes, 0 or more" unless offset.is_a?(Integer) && offset >= 0
+
+        out << ["offset", offset.to_s]
+      end
+      out << %w[append 1] if append
+      unless mode.nil?
+        m = mode.is_a?(Integer) ? format("%o", mode) : mode.to_s
+        raise ArgumentError, 'mode: permission bits in octal, e.g. "755" or 0o755' unless /\A[0-7]{3,4}\z/.match?(m)
+
+        out << ["mode", m]
+      end
+      out
     end
 
     # A folder's entries (default /workspace), as info Hashes.

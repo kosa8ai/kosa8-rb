@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Files: `read` / `download` take `range:` (`0..1023`, `1024..`, `-500` or `"bytes=a-b"`; one Range header);
+  `write` takes `offset:`, `append: true` and `mode:`; `upload` takes an IO (a File is read a part at a time)
+  and sends anything past `part_size:` (64 MiB) in parts with `offset=`, so files over the API's 100 MB request
+  limit upload. An `append` write is never retried after a 5xx or no answer, so it cannot land twice. The docs no
+  longer say a file is at most 8 MiB (that is only hosts without streamed files).
 - Streamed exec: `CloudSandbox#exec_stream(cmd, timeout_s:, on_stdout:, on_stderr:) { |stream, text| ... }`
   reads the output as the command prints it (NDJSON frames, heartbeats skipped, UTF-8 decoded across chunks)
   and is not held to the 90 s of a buffered exec; `timeout_s` up to a day. `exec` streams when given

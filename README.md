@@ -63,8 +63,11 @@ page = cloud.sandboxes.list_page(limit: 50)  # one page: page.sandboxes, page.ne
 # These need the host's data plane. On a host without it they raise
 # Kosa8::UnsupportedError (501 not_available / not_supported): not every
 # kosa8 Cloud host has it yet.
-box.files.write("/workspace/data.bin", File.binread("data.bin"))  # bytes or text, at most 8 MiB
+box.files.write("/workspace/data.bin", File.binread("data.bin"))  # bytes or text, streamed to the host
 bytes = box.files.read("/workspace/data.bin")                     # a binary String
+head = box.files.read("/workspace/data.bin", range: 0..1023)      # part of it (also range: -500, 1024..)
+box.files.write("/workspace/log.txt", "line\n", append: true)     # also offset: and mode: "755"
+File.open("big.tar", "rb") { |f| box.files.upload("/workspace/big.tar", f) }  # any size, in 64 MiB parts
 puts box.files.list("/workspace").map { |f| f["name"] }
 box.files.mkdir("/workspace/out")
 box.files.delete("/workspace/out", recursive: true)
@@ -114,8 +117,8 @@ puts box.previews.create(3000)["url"]               # private signed URL; public
 box.terminal(cols: 120, rows: 40)["url"]            # a wss:// PTY URL
 ```
 
-- Files: `files.download(path)` / `files.upload(path, data)` (no 8 MiB cap), `files.link(path,
-  method: "PUT")` (presigned URL).
+- Files: `files.download(path, range:)` / `files.upload(path, data_or_io, part_size:, mode:)` (any size; past
+  100 MB in parts with `offset=`), `files.link(path, method: "PUT")` (presigned URL, straight to the host).
 - `egress`, `set_egress(presets: ["pypi"])`, `reset_egress`; `cloud.egress_presets`.
 - `run_code("print(6*7)", context: "a")` (stateful Python; persistent sandbox with python3),
   `code_contexts`, `create_code_context`, `reset_code_context`, `delete_code_context`.
@@ -242,7 +245,9 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
   `box.exec(cmd, timeout_s: 30)` stops a command sooner, in the sandbox (1 to 90 whole seconds). Run long
   work in the background and poll it:
   `box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1; echo $? > /workspace/test.exit' &")`.
-- A request body (command and env) is at most 64 KiB; a file read or write is at most 8 MiB.
+- A request body (command and env) is at most 64 KiB. A file read or write streams to the host (one request
+  at most 100 MB through the API; `files.upload` sends a bigger file in parts); hosts without streamed files
+  take at most 8 MiB a file.
 - Set `ttl_s:` (60 s to 90 days) or `delete_after:` (Unix ms) on create so a crashed script cannot leave a
   sandbox running. Bad values raise `ArgumentError` before any request.
 - Sandboxes take `name:` and `labels:` on create (`set_labels` later); `list(labels: {...})` filters by them.

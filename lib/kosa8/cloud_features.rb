@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "stringio"
 require "uri"
 
 # More of kosa8 Cloud: sized and Docker creates, env, background commands,
@@ -428,16 +429,40 @@ module Kosa8
   end
 
   class CloudFiles
-    # A file of any size (no 8 MiB cap), as a binary String.
-    def download(path)
-      @cloud.request_bytes("GET", query("/files/raw", path), raw: true)
+    # The most one upload request carries; a bigger file goes in parts.
+    UPLOAD_PART_BYTES = 64 * 1024 * 1024
+
+    # A file of any size (no 8 MiB cap), as a binary String; +range:+ as #read.
+    def download(path, range: nil)
+      @cloud.request_bytes("GET", query("/files/raw", path), raw: true, headers: CloudFiles.range_header(range))
     end
 
-    # Write +content+ to a file of any size; returns its info Hash.
-    def upload(path, content)
-      content = content.read if content.respond_to?(:read)
-      r = @cloud.request_bytes("PUT", query("/files/raw", path), data: content.to_s)
-      r.is_a?(Hash) ? (r["file"] || {}) : {}
+    # Write +content+ (a String, or an IO such as a File, read a part at a
+    # time) to a file of any size; returns its info Hash. Past +part_size+
+    # bytes (default 64 MiB; one request through the API is at most 100 MB)
+    # it is sent in parts with offset=, each retried on its own; a host
+    # without offset writes answers 501 (Kosa8::UnsupportedError): use
+    # #link(path, method: "PUT") then. +mode:+ as #write.
+    def upload(path, content, part_size: UPLOAD_PART_BYTES, mode: nil)
+      unless part_size.is_a?(Integer) && part_size.positive?
+        raise ArgumentError, "part_size: a whole number of bytes, more than 0"
+      end
+
+      CloudFiles.put_params(nil, false, mode) # a bad mode: is refused before any part is sent
+      io = content.respond_to?(:read) ? content : StringIO.new(content.to_s.b)
+      cur = (io.read(part_size) || +"").b
+      offset = 0
+      loop do
+        nxt = cur.bytesize == part_size ? io.read(part_size) : nil
+        last = nxt.nil? || nxt.empty?
+        # The first part replaces the file; the rest are written at their offset.
+        params = CloudFiles.put_params(offset.zero? ? nil : offset, false, last ? mode : nil)
+        r = @cloud.request_bytes("PUT", query("/files/raw", path, params), data: cur)
+        offset += cur.bytesize
+        return r.is_a?(Hash) ? (r["file"] || {}) : {} if last
+
+        cur = nxt.b
+      end
     end
 
     # A presigned URL for one download (GET) or upload (PUT) of +path+,
