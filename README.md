@@ -250,12 +250,16 @@ Kosa8::Cloud.new(api_key: tok["secret"])  # hand this to your end user, not your
 |---|---|---|
 | `Kosa8::PaymentRequiredError` (402) | no payment method (`payment_required`), spending cap reached (`spending_cap_reached`), Store price not accepted (`price_not_accepted`) | show `e.upgrade_url`; an agent should relay `e.agent_message` to its person and stop |
 | `Kosa8::OrgFrozenError` (423, `org_frozen`) | the org is frozen in the Security Center | an owner or admin unfreezes it; retrying does not help |
-| `Kosa8::RateLimitError` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `e.retry_after` seconds when set, or delete sandboxes |
+| `Kosa8::RateLimitError` (429) | too many requests, or `quota_exceeded` (active sandbox limit) | wait `e.retry_after` seconds when set, or delete sandboxes; for `quota_exceeded` relay `e.agent_message` and point at `e.request_url` |
 | `Kosa8::ExecTimeoutError` (504 `exec_timeout`, or today's 502 "timed out" on exec) | a buffered exec ran past its 90 s limit | run it in the background and poll |
 | `Kosa8::UnsupportedError` (501) | the host has no data plane yet (files, checkpoints, rewind, fork, ports), or the sandbox runs on overflow capacity (Cloudflare), which has no fork, checkpoint or sleep | use `exec`, or create it on a kosa8 host (a template, or a size such as `2x4`) |
 | `Kosa8::ApiError` (503 `database_busy`, 409 `template_building`) | the API's database was overloaded, or a benchmark environment is still building | retried for you (Retry-After); if it still fails, try again later |
 
-Every Cloud error is a `Kosa8::ApiError` carrying the server's stable `e.code`, its message and `e.body`.
+Every Cloud error is a `Kosa8::ApiError` carrying the server's stable `e.code`, its message and `e.body`,
+and the contract fields as methods (nil when absent): `upgrade_url`, `agent_message`, `request_url`, and for a
+402 `plan_limit` / `plan_feature` `limit_name`, `limit`, `used`, `plan`, `next_plan`, `feature`, `options`
+(the ways past the limit, cheaper first) and `pack_url`. `Kosa8::ExecTimeoutError#stdout` / `#stderr` hold the
+output so far.
 
 ## The same thing in each language
 

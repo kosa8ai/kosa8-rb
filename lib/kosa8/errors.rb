@@ -63,7 +63,70 @@ module Kosa8
   end
 
   class ConnectionError < Error; end # daemon unreachable
-  class ApiError < Error; end        # any HTTP error answer
+
+  # Any HTTP error answer. A kosa8 Cloud answer's contract fields (see the
+  # API's Error schema) are read from +body+; each is nil when the answer
+  # did not carry it.
+  class ApiError < Error
+    # 402: where the person adds a payment method or credit, or raises the cap.
+    def upgrade_url
+      Kosa8.body_str(body, "upgrade_url")
+    end
+
+    # 402 and 429 quota_exceeded: a sentence an AI agent should relay to its
+    # person word for word.
+    def agent_message
+      Kosa8.body_str(body, "agent_message")
+    end
+
+    # 429 quota_exceeded: where to ask for a higher limit.
+    def request_url
+      Kosa8.body_str(body, "request_url")
+    end
+
+    # 402 plan_limit: which limit (sandbox_hours, running, size, persistent or snapshots).
+    def limit_name
+      Kosa8.body_str(body, "limit_name")
+    end
+
+    # 402 plan_limit: the plan's limit (a Number).
+    def limit
+      Kosa8.body_num(body, "limit")
+    end
+
+    # 402 plan_limit: what the organization has used.
+    def used
+      Kosa8.body_num(body, "used")
+    end
+
+    # 402 plan_limit and plan_feature: the organization's plan.
+    def plan
+      Kosa8.body_str(body, "plan")
+    end
+
+    # 402 plan_limit and plan_feature: the first plan that includes more (nil: contact sales).
+    def next_plan
+      Kosa8.body_str(body, "next_plan")
+    end
+
+    # 402 plan_feature: the feature the plan lacks.
+    def feature
+      Kosa8.body_str(body, "feature")
+    end
+
+    # 402 plan_limit: the ways past the limit, cheaper first (Hashes: "kind"
+    # pack or upgrade, "addon", "plan", "label", "monthly_usd", "url").
+    def options
+      v = body.is_a?(Hash) ? body["options"] : nil
+      v.is_a?(Array) ? v.select { |o| o.is_a?(Hash) } : []
+    end
+
+    # 402 plan_limit: where to add the pack for this limit, when one is sold.
+    def pack_url
+      Kosa8.body_str(body, "pack_url")
+    end
+  end
+
   class BadRequestError < ApiError; end   # 400
   class AuthError < ApiError; end         # 401
   class PolicyError < ApiError; end       # 403
@@ -73,20 +136,13 @@ module Kosa8
 
   # 402: kosa8 Cloud wants a payment method, credit or an accepted price first
   # (+code+ payment_required, spending_cap_reached, price_not_accepted, ...).
-  class PaymentRequiredError < ApiError
-    # Where the person adds a payment method or credit; nil when the answer has none.
-    def upgrade_url
-      Kosa8.body_str(body, "upgrade_url")
-    end
+  # #upgrade_url, #agent_message and the plan_limit fields (#limit_name,
+  # #limit, #used, #plan, #next_plan, #options, #pack_url) are on ApiError.
+  class PaymentRequiredError < ApiError; end
 
-    # A sentence an AI agent should relay to its person word for word; nil when absent.
-    def agent_message
-      Kosa8.body_str(body, "agent_message")
-    end
-  end
-
-  # 429: too many requests, or a quota reached (+code+ quota_exceeded).
-  # +retry_after+ is the server's Retry-After in seconds, when it sent one.
+  # 429: too many requests, or a quota reached (+code+ quota_exceeded, with
+  # #agent_message and #request_url). +retry_after+ is the server's
+  # Retry-After in seconds, when it sent one.
   class RateLimitError < ApiError; end
 
   # 423 (+code+ org_frozen): the org is frozen in the Security Center. New
@@ -100,7 +156,24 @@ module Kosa8
   # writing to /workspace, and poll it:
   #
   #   box.exec("nohup sh -c 'make test > /workspace/test.log 2>&1' &")
-  class ExecTimeoutError < ApiError; end
+  class ExecTimeoutError < ApiError
+    attr_writer :stdout, :stderr
+
+    # The output so far: a streamed exec's, or what a buffered exec stopped
+    # at its own timeout_s sent back ("" when the answer had none).
+    def stdout
+      @stdout || Kosa8.body_str(body, "stdout") || ""
+    end
+
+    def stderr
+      @stderr || Kosa8.body_str(body, "stderr") || ""
+    end
+
+    # The limit the command ran past, in seconds, when the answer said.
+    def limit_s
+      Kosa8.body_num(body, "limit_s")
+    end
+  end
 
   # 403 that a signed approval would lift; +approval+ is the daemon's refusal.
   class ApprovalRequiredError < PolicyError
@@ -139,6 +212,12 @@ module Kosa8
   def self.body_str(body, key)
     v = body.is_a?(Hash) ? body[key] : nil
     v.is_a?(String) && !v.empty? ? v : nil
+  end
+
+  # body[key] when it is a Number, else nil.
+  def self.body_num(body, key)
+    v = body.is_a?(Hash) ? body[key] : nil
+    v.is_a?(Numeric) ? v : nil
   end
 
   # The typed error for an HTTP error answer: the daemon's message with its
