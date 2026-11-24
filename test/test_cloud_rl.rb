@@ -542,11 +542,12 @@ class CloudRLTest < Minitest::Test
         run = r
         r.record([{ "reward" => 1 }, { "reward" => 0 }], flush: false)
         # A POST of rollouts carries an Idempotency-Key, so a 5xx is retried,
-        # up to the policy's 3 attempts (each with a new key after the 5xx);
-        # then the rows stay buffered.
+        # up to the policy's 3 attempts, all with the chunk's one key (kosa8
+        # Cloud keeps no 5xx answer, so each runs again); then the rows stay
+        # in flight with that key.
         assert_raises(Kosa8::ApiError) { r.flush }
         assert_equal 3, f.calls("POST", "/v1/rl/runs/run_9/rollouts").size
-        assert_equal 3, f.calls("POST", "/v1/rl/runs/run_9/rollouts").map { |x| x[:headers]["idempotency-key"] }.uniq.size
+        assert_equal 1, f.calls("POST", "/v1/rl/runs/run_9/rollouts").map { |x| x[:headers]["idempotency-key"] }.uniq.size
         assert_equal 2, r.pending
         raise "trainer crashed"
       end

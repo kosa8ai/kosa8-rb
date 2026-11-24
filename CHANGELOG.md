@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- RL rollouts: each flushed chunk carries an Idempotency-Key that stays with those rows until
+  kosa8 Cloud answers, so a flush whose answer was lost and is resent later is stored once.
 - `build_template` / `tar_dir`: a `.dockerignore` entry with a leading `/` (`/build`) now excludes that path
   (it was sent in the build context); a bare `/` or `.` entry is ignored rather than matching nothing.
 - `CloudBrowser#screenshot` says why when the API sent none (`screenshot_note`, e.g. too large).
