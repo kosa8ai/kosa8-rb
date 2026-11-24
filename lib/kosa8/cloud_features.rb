@@ -137,12 +137,13 @@ module Kosa8
                size: nil, cpus: nil, mem_mb: nil, image: nil, disk_gb: nil, persistent: nil, docker: nil, cpu: nil,
                name: nil, labels: nil, env: nil, secrets: nil, egress: nil, snapshot: nil, wait: true,
                poll_interval: 1, lease_s: nil, run_id: nil, idempotency_key: nil, record: nil, ai_gateway: nil,
-               kvm: nil)
+               kvm: nil, repo: nil)
       body = create_body(template: template, region: region, sleep_after_s: sleep_after_s, ttl_s: ttl_s,
                          delete_after: delete_after, accept_price: accept_price, size: size, cpus: cpus,
                          mem_mb: mem_mb, image: image, disk_gb: disk_gb, persistent: persistent, docker: docker,
                          cpu: cpu, name: name, labels: labels, env: env, secrets: secrets, egress: egress,
                          snapshot: snapshot, record: record, ai_gateway: ai_gateway, kvm: kvm)
+      body["repo"] = Cloud.repo_body(repo) unless repo.nil?
       amb = @cloud.run_defaults || {}
       run_id = amb["run_id"] if run_id.nil?
       if lease_s.nil? && ttl_s.nil? && delete_after.nil?

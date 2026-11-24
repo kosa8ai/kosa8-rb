@@ -125,6 +125,24 @@ module Kosa8
     def pack_url
       Kosa8.body_str(body, "pack_url")
     end
+
+    # 409 github_not_connected: where an admin connects GitHub.
+    def connect_url
+      Kosa8.body_str(body, "connect_url")
+    end
+
+    # 409 github_permissions: where on GitHub to approve the permissions
+    # kosa8 lacks.
+    def settings_url
+      Kosa8.body_str(body, "settings_url")
+    end
+
+    # 409 github_permissions: the GitHub App permissions missing
+    # (contents:write, pull_requests:write, ...); [] otherwise.
+    def missing_permissions
+      v = body.is_a?(Hash) ? body["missing"] : nil
+      v.is_a?(Array) ? v.select { |x| x.is_a?(String) } : []
+    end
   end
 
   class BadRequestError < ApiError; end   # 400
@@ -133,6 +151,28 @@ module Kosa8
   class NotFoundError < ApiError; end     # 404
   class ConflictError < ApiError; end     # 409
   class UnsupportedError < ApiError; end  # 501
+
+  # 409 github_not_connected: the org has not connected GitHub yet; an admin
+  # connects it at #connect_url.
+  class GitHubNotConnectedError < ConflictError; end
+  # 409 github_permissions: the kosa8 GitHub App lacks #missing_permissions;
+  # approve them at #settings_url.
+  class GitHubPermissionsError < ConflictError; end
+  # 409 no_changes: nothing changed in the sandbox's repo, so nothing to push.
+  class NoChangesError < ConflictError; end
+  # 404 repo_not_found: the repo is not visible to the org's GitHub
+  # installations (or does not exist).
+  class RepoNotFoundError < NotFoundError; end
+  # 502 github_unavailable: GitHub did not answer or rate-limited kosa8; try
+  # again after #retry_after_s.
+  class GitHubUnavailableError < ApiError; end
+
+  # Typed errors by kosa8 Cloud code, before the status fallback.
+  BY_CODE = {
+    "github_not_connected" => GitHubNotConnectedError, "github_permissions" => GitHubPermissionsError,
+    "no_changes" => NoChangesError, "repo_not_found" => RepoNotFoundError,
+    "github_unavailable" => GitHubUnavailableError
+  }.freeze
 
   # 402: kosa8 Cloud wants a payment method, credit or an accepted price first
   # (+code+ payment_required, spending_cap_reached, price_not_accepted, ...).
@@ -239,7 +279,7 @@ module Kosa8
            code: code }
     return ApprovalRequiredError.new(text, approval: approval, **kw) if approval
 
-    (BY_STATUS[status] || ApiError).new(text, **kw)
+    (BY_CODE[code] || BY_STATUS[status] || ApiError).new(text, **kw)
   end
 
   # The failure classes kosa8 Cloud puts on every answer under /v1/sandboxes.
