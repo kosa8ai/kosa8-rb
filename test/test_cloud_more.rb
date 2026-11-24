@@ -55,7 +55,7 @@ class CloudMoreTest < Minitest::Test
   end
 
   def test_version
-    assert_equal "0.6.0", Kosa8::VERSION
+    assert_equal "0.7.0", Kosa8::VERSION
   end
 
   # ---- retries ----

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-11-23
 
 - RL rollouts: each flushed chunk carries an Idempotency-Key that stays with those rows until
   kosa8 Cloud answers, so a flush whose answer was lost and is resent later is stored once.
