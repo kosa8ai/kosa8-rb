@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `build_template` / `tar_dir`: a `.dockerignore` entry with a leading `/` (`/build`) now excludes that path
+  (it was sent in the build context); a bare `/` or `.` entry is ignored rather than matching nothing.
+- `CloudBrowser#screenshot` says why when the API sent none (`screenshot_note`, e.g. too large).
+- Gem metadata: summary and description start "Zero Trust cybersecurity infrastructure for AI agents";
+  homepage, changelog, bug tracker and documentation URIs; CHANGELOG.md ships in the gem.
 - `sandboxes.create(disk_gb:)` takes up to 500 (was refused past 200, though Team and Scale plans allow 256
   and 500); `kvm: true` (preview). A create from a snapshot also refuses `mem_mb:` and `kvm:`.
   `exec_background(timeout_s:)` (up to a day). `CloudExecResult` has `stdout_truncated`, `stderr_truncated`,

@@ -280,7 +280,10 @@ module Kosa8
     def screenshot(url, full_page: false)
       p = page(url, screenshot: true, full_page: full_page ? true : nil)
       b64 = p.is_a?(Hash) ? p["screenshot_png_base64"] : nil
-      raise Error, "the API sent no screenshot" if b64.nil? || b64.empty?
+      if b64.nil? || b64.empty?
+        note = p.is_a?(Hash) && p["screenshot_note"].is_a?(String) ? ": #{p['screenshot_note']}" : ""
+        raise Error, "the API sent no screenshot#{note}"
+      end
 
       b64.unpack1("m").b
     end

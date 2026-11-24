@@ -290,7 +290,8 @@ module Kosa8
       di = File.join(path, ".dockerignore")
       if File.exist?(di)
         ignore = File.readlines(di).reject { |l| l.strip.empty? || l.start_with?("#") }
-                     .map { |l| Pathname.new(l.strip).cleanpath.to_s }
+                     .map { |l| Pathname.new(l.strip).cleanpath.to_s.sub(%r{\A/+}, "") } # "/build" is "build"
+                     .reject { |l| l.empty? || l == "." }
       end
       skip = ->(rel) { ignore.any? { |p| rel == p || rel.start_with?(p + "/") } }
       io = StringIO.new(+"".b)
