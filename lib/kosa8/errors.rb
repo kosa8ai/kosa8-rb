@@ -190,7 +190,13 @@ module Kosa8
   # 429: too many requests, or a quota reached (+code+ quota_exceeded, with
   # #agent_message and #request_url). +retry_after+ is the server's
   # Retry-After in seconds, when it sent one.
-  class RateLimitError < ApiError; end
+  class RateLimitError < ApiError
+    # A plan limit answered 429 (PlanLimitError) still matches +rescue
+    # RateLimitError+, for code written before it existed.
+    def self.===(other)
+      super || (equal?(RateLimitError) && other.is_a?(PlanLimitError) && other.status == 429)
+    end
+  end
 
   # 423 (+code+ org_frozen): the org is frozen in the Security Center. New
   # sandboxes, commands, wakes and function calls are refused until an owner or
@@ -249,6 +255,14 @@ module Kosa8
   # Raised when a frame stream carries something that is not NDJSON.
   class ProtocolError < Error; end
 
+  # A plan limit answered with HTTP 429 (Starter's running limit,
+  # +starter_limit+): a PaymentRequiredError like every other plan limit
+  # (pick a plan or stop a sandbox; retrying does not help).
+  class PlanLimitError < PaymentRequiredError; end
+
+  # Codes that mean "pick or pay for a plan", whatever the HTTP status.
+  PLAN_LIMIT_CODES = %w[starter_limit plan_limit plan_feature plan_required].freeze
+
   BY_STATUS = {
     400 => BadRequestError, 401 => AuthError, 402 => PaymentRequiredError, 403 => PolicyError,
     404 => NotFoundError, 409 => ConflictError, 423 => OrgFrozenError, 429 => RateLimitError,
@@ -286,6 +300,10 @@ module Kosa8
            code: code }
     return ApprovalRequiredError.new(text, approval: approval, **kw) if approval
 
+    if !BY_CODE[code] && PLAN_LIMIT_CODES.include?(code)
+      return (status == 429 ? PlanLimitError : PaymentRequiredError).new(text, **kw)
+    end
+
     (BY_CODE[code] || BY_STATUS[status] || ApiError).new(text, **kw)
   end
 
@@ -296,6 +314,7 @@ module Kosa8
                    insufficient_storage starting database_busy].freeze
   RATE_CODES = %w[rate_limited slow_down too_soon].freeze
   QUOTA_CODES = %w[quota_exceeded running_limit plan_required plan_limit plan_feature payment_required payment_declined
+                   payment_failed spend_cap starter_limit
                    spending_cap_reached snapshot_limit org_frozen org_suspended too_many_runs].freeze
   IDEMPOTENCY_IN_PROGRESS = "idempotency_in_progress"
 
