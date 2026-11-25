@@ -9,7 +9,7 @@ Method for method it matches [`@kosa8/sdk`](https://github.com/kosa8ai/kosa8-js)
 
 ```sh
 gem install kosa8
-# or in a Gemfile: gem "kosa8", "~> 0.6"
+# or in a Gemfile: gem "kosa8", "~> 0.9"
 export KOSA8_API_KEY=k8c_live_...   # made in the cloud dashboard
 ```
 

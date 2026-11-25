@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 - 2026-11-25
 
 - Autopilot: `cloud.bots` with `list` (`bots`, `paused_all`, `pending_approvals`), `templates`, `template(id)`,
   `plan(template: | spec:, name:, replay:)`, `compile(text)` (at most 500 characters, checked before sending),
