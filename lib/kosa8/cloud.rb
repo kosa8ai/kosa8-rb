@@ -41,7 +41,7 @@ module Kosa8
   # kosa8 Cloud: the same sandboxes, run on kosa8's hosts (or your own, with
   # bring-your-own-cloud) instead of the local daemon.
   #
-  #   cloud = Kosa8::Cloud.new            # KOSA8_API_KEY from the environment
+  #   cloud = Kosa8::Cloud.new            # KOSA8_API_KEY, else your `kosa8 login`
   #   box = cloud.sandboxes.create(template: "python", ttl_s: 3600)
   #   box.exec(["python3", "-c", "print(6 * 7)"]).stdout  # => "42\n"
   #   box.delete
@@ -101,11 +101,48 @@ module Kosa8
     # retry_after / retry_after_s). An answer with retryable: false is never
     # retried. RetryPolicy::NONE turns it off. sleeper: replaces
     # Kernel#sleep for those waits (tests).
+    # Where `kosa8 login` keeps the kosa8 Cloud key: ~/.kosa8/cloud.json.
+    # With an +env+ other than ENV, its HOME decides (none: no file).
+    def self.credentials_path(env = ENV)
+      home = env["HOME"] || env["USERPROFILE"]
+      if (home.nil? || home.empty?) && env.equal?(ENV)
+        home = begin
+          Dir.home
+        rescue ArgumentError
+          nil
+        end
+      end
+      return nil if home.nil? || home.empty?
+
+      File.join(home, ".kosa8", "cloud.json")
+    end
+
+    # [key, api_url] that `kosa8 login` saved, or ["", nil] when none.
+    def self.saved_login(env = ENV)
+      path = credentials_path(env)
+      return ["", nil] unless path && File.file?(path)
+
+      data = JSON.parse(File.read(path))
+      return ["", nil] unless data.is_a?(Hash)
+
+      key = (data["key"] || data["api_key"]).to_s.strip
+      url = data["api_url"].to_s.strip
+      [key, url.empty? ? nil : url]
+    rescue StandardError
+      ["", nil]
+    end
+
     def initialize(api_key: nil, base_url: nil, env: ENV, timeout: 120, transport: nil, retry_policy: nil,
                    sleeper: nil)
       key = (api_key.nil? ? env["KOSA8_API_KEY"].to_s : api_key.to_s).strip
+      saved_url = nil
+      if key.empty? && api_key.nil?
+        # Signed in with `kosa8 login`: the CLI keeps the key in ~/.kosa8/cloud.json.
+        key, saved_url = Cloud.saved_login(env)
+      end
       if key.empty?
-        raise Error, "no kosa8 Cloud API key: set KOSA8_API_KEY or pass api_key:; make one at #{KEYS_URL}"
+        raise Error, "no kosa8 Cloud API key: run `kosa8 login`, set KOSA8_API_KEY or pass api_key:; " \
+                     "make one at #{KEYS_URL}"
       end
       unless key.start_with?(KEY_PREFIX) || key.start_with?(TOKEN_PREFIX)
         raise Error, "a kosa8 Cloud API key starts with #{KEY_PREFIX} (a capability token with #{TOKEN_PREFIX}); " \
@@ -113,7 +150,7 @@ module Kosa8
       end
 
       @key = key
-      base = [base_url, env["KOSA8_CLOUD_URL"]].find { |v| v && !v.to_s.empty? } || DEFAULT_URL
+      base = [base_url, env["KOSA8_CLOUD_URL"], saved_url].find { |v| v && !v.to_s.empty? } || DEFAULT_URL
       @base_url = Cloud.check_base(base.to_s)
       @timeout = timeout
       @transport = transport || method(:net_http)
